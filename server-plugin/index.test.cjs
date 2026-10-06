@@ -12,12 +12,13 @@ const ping = args.includes('com.foreverharibo.sillypop.PING');
 if (process.env.SILLY_POP_TEST_MODE === 'error') {
     console.error('java.lang.SecurityException: permission denial'); process.exit(1);
 }
-if (process.env.SILLY_POP_TEST_MODE === 'missing') console.log('Broadcast completed: result=0');
+if (process.env.SILLY_POP_TEST_MODE === 'dispatch') console.log('Broadcasting: Intent { act=com.foreverharibo.sillypop.PING } Broadcast sent without waiting for result');
+else if (process.env.SILLY_POP_TEST_MODE === 'missing') console.log('Broadcast completed: result=0');
 else if (process.env.SILLY_POP_TEST_MODE === 'denied') console.log(ping
-    ? 'Broadcast completed: result=-1, data="silly-pop-ready:0.2.2;permission=disabled"'
+    ? 'Broadcast completed: result=-1, data="silly-pop-ready:0.2.3;permission=disabled"'
     : 'Broadcast completed: result=0, data="notification-permission-disabled"');
 else console.log(ping
-    ? 'Broadcast completed: result=-1, data="silly-pop-ready:0.2.2;permission=allowed"'
+    ? 'Broadcast completed: result=-1, data="silly-pop-ready:0.2.3;permission=allowed"'
     : 'Broadcast completed: result=-1, data="ok"');
 `, { mode: 0o700 });
 process.env.SILLY_POP_BRIDGE_COMMAND = command;
@@ -33,7 +34,7 @@ async function run() {
     assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=0', true), false);
     assert.equal(api.broadcastCompleted(0, 'Broadcasting: Intent {}'), false);
     assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=-1, data="silly-pop-ready"', true), true);
-    assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=0, data="silly-pop-ready:0.2.2"', true), true);
+    assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=0, data="silly-pop-ready:0.2.3"', true), true);
     assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=-1, data="ok"'), true);
     assert.equal(api.broadcastCompleted(0, 'Error: receiver not found', true), false);
     assert.equal(api.broadcastCompleted(1, 'data="ok"'), false);
@@ -54,9 +55,9 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.2.0');
+    assert.equal(status.body.version, '2.2.1');
     assert.equal(status.body.appReady, true);
-    assert.equal(status.body.appVersion, '0.2.2');
+    assert.equal(status.body.appVersion, '0.2.3');
     assert.equal(status.body.command, command);
 
     const state = response();
@@ -72,6 +73,22 @@ async function run() {
     assert.equal(calls.filter(args => args.includes('com.foreverharibo.sillypop.NOTIFY')).length, 1);
     assert(calls.every(args => args.includes('--user') && args.includes('-n')));
 
+    assert.equal(api.broadcastDispatched(0, 'Broadcast sent without waiting for result'), true);
+    assert.equal(api.broadcastDispatched(1, 'Broadcast sent without waiting for result'), false);
+    assert.equal(api.broadcastDispatched(0, 'Error: Broadcast sent without waiting for result'), false);
+    assert.equal(api.broadcastDispatched(0, 'Broadcast completed: result=0'), false);
+    process.env.SILLY_POP_TEST_MODE = 'dispatch';
+    const dispatch = response();
+    await routes.get.get('/status')({query:{refresh:'1'}}, dispatch);
+    assert.equal(dispatch.body.appReady, true);
+    assert.equal(dispatch.body.appInstalled, null, 'Dispatch must not claim app installation');
+    assert.equal(dispatch.body.notificationAllowed, null, 'Dispatch cannot verify permission');
+    assert.equal(dispatch.body.dispatchOnly, true);
+    const dispatchedTest = response();
+    await routes.post.get('/test')({body:{}}, dispatchedTest);
+    assert.equal(dispatchedTest.body.ok, true);
+    assert.equal(dispatchedTest.body.receiptConfirmed, false, 'Dispatch must not claim receipt');
+    assert.equal(dispatchedTest.body.dispatchOnly, true);
     process.env.SILLY_POP_TEST_MODE = 'missing';
     assert.equal((await api.checkCompanion(true)).installed, false, 'result=0 cannot prove installation');
     await assert.rejects(api.runNotification({}), /앱 응답/);

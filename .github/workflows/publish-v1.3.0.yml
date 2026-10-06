@@ -36,6 +36,20 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Enable KVM for Android tests
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test launcher switching and notification receipt on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: cd android-app && gradle --no-daemon :app:connectedDebugAndroidTest
+
       - name: Restore release signing key
         shell: bash
         env:
@@ -53,31 +67,34 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.2-test.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.2-test.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.3-test.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.3-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.2.2-test
-          path: Silly-Pop-v0.2.2-test.apk
+          name: Silly-Pop-v0.2.3-test
+          path: Silly-Pop-v0.2.3-test.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish test release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.2-test
-          name: Silly-Pop v0.2.2-test
+          tag_name: v0.2.3-test
+          name: Silly-Pop v0.2.3-test
           prerelease: true
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v0.2.2 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v0.2.3 테스트 버전입니다.
 
-            - 흑백 화면·아이콘 동시 전환, 작은 버튼과 곡선형 ST 로고
+            - Android 14+ Termux 응답 미지원 전송 모드 처리
+            - 전송 접수와 실제 수신 확인을 구분
+            - 아이콘 진입점과 실제 화면을 분리해 색상 변경 시 종료 문제 수정
+            - 로고와 UI 디자인은 그대로 유지
             - 브라우저 알림 제거, 앱 알림만 사용
-            - Termux용 am 호출 및 실제 수신 응답 확인
-            - 확장 1.4.0 / 서버 2.2.0 버전·연결 진단 표시
-            - 앱 0.2.1에서 삭제 없이 덮어 설치 가능
+            - Termux용 am 호출, 지원하는 Android 버전에서는 실제 수신 응답 확인
+            - 확장 1.4.1 / 서버 2.2.1 버전·연결 진단 표시
+            - 앱 0.2.1/0.2.2에서 삭제 없이 덮어 설치 가능
             - 서버 플러그인도 별도 업데이트한 뒤 실리태번 완전 재시작 필요
             - 인터넷, 파일, 사진, 연락처, 전화, 문자, 접근성 권한 없음
-          files: Silly-Pop-v0.2.2-test.apk
+          files: Silly-Pop-v0.2.3-test.apk

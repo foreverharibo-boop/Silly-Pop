@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.2.0';
+const REQUIRED_BRIDGE_VERSION = '2.2.1';
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -153,10 +153,10 @@ function updateCompanionStatus() {
     if (!badge || !detail) return;
 
     badge.dataset.state = companionState.ready ? 'granted' : companionState.installed ? 'default' : 'unsupported';
-    badge.textContent = companionState.ready ? '연결됨' : companionState.installed ? '준비 필요' : '미설치';
+    badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.0 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || '미확인'}`;
+        `확장 1.4.1 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const diagnostic = root.querySelector('.st-rn-diagnostic');
     diagnostic.hidden = !companionState.diagnostic;
     diagnostic.textContent = companionState.diagnostic || '';
@@ -189,12 +189,14 @@ async function checkCompanion(force = false) {
                 ready: !outdated && Boolean(data.appReady),
                 version: String(data.version || ''),
                 appVersion: String(data.appVersion || ''),
+                dispatchOnly: Boolean(data.dispatchOnly),
                 diagnostic: String(data.diagnostic || ''),
                 detail: outdated
                     ? `서버 플러그인이 v${data.version || '?'}예요. 서버 플러그인을 v${REQUIRED_BRIDGE_VERSION} 이상으로 업데이트하고 실리태번을 완전히 재시작해 주세요. 웹 확장 업데이트와는 별개예요.`
                     : data.appInstalled && !allowed
                         ? '앱은 연결됐지만 알림 권한이 꺼져 있어요. Silly-Pop 앱에서 허용해 주세요.'
-                        : data.appReady ? 'Silly-Pop 앱과 연결됐어요.' : data.detail || '앱의 응답을 확인하지 못했어요.',
+                        : data.dispatchOnly ? data.detail
+                            : data.appReady ? 'Silly-Pop 앱과 연결됐어요.' : data.detail || '앱의 응답을 확인하지 못했어요.',
             };
             void sendCompanionState();
         } catch (error) {
@@ -255,6 +257,7 @@ async function sendCompanionTest() {
     if (!response.ok || !data.ok) {
         throw new Error(data.error || `HTTP ${response.status}`);
     }
+    return data;
 }
 
 function bindSetting(root, id, key) {
@@ -276,7 +279,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.0</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.1</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -315,8 +318,10 @@ function renderSettings() {
         try {
             const state = await checkCompanion(true);
             if (!state.ready) throw new Error(state.detail);
-            await sendCompanionTest();
-            toast('success', 'Silly-Pop 앱이 테스트 알림을 받았어요.');
+            const delivery = await sendCompanionTest();
+            toast(delivery.receiptConfirmed ? 'success' : 'info', delivery.receiptConfirmed
+                ? 'Silly-Pop 앱이 테스트 알림을 받았어요.'
+                : '앱으로 전송 요청을 보냈어요. 휴대폰에 테스트 알림이 실제로 떴는지 확인해 주세요.');
         } catch (error) {
             toast('error', error.message);
         } finally {

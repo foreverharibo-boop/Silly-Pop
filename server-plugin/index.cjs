@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.2.0';
+const VERSION = '2.2.1';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -41,6 +41,13 @@ function broadcastCompleted(code, output, ping = false) {
     // A completed broadcast with result=0 can mean NO receiver handled it.
     // Require the acknowledgement written by our own receiver, not just am's exit code.
     return ping ? /silly-pop-ready\b/.test(output) : /data=["']?ok(?:["'\s,]|$)/.test(output);
+}
+
+function broadcastDispatched(code, output) {
+    // TermuxAm intentionally omits the result receiver on Android 14+.
+    // This proves dispatch only, NEVER installation, permission or receipt.
+    return code === 0 && /Broadcast sent without waiting for result/.test(output)
+        && !/(?:error|exception|unable|not found|does not exist|permission denial)/i.test(output);
 }
 
 function bridgeCandidates(env = process.env) {
@@ -101,13 +108,17 @@ async function checkCompanion(force = false) {
         if (command) {
             const result = await executeBroadcast(command, broadcastArgs(APP_PING_ACTION));
             const installed = broadcastCompleted(result.code, result.output, true);
-            status = { installed, command, reason: installed ? 'ready' : result.timedOut ? 'timeout' : 'receiver_unconfirmed',
-                detail: installed ? '알림 앱의 응답을 확인했어요.' : result.timedOut
+            const dispatchOnly = broadcastDispatched(result.code, result.output);
+            status = { installed: dispatchOnly ? null : installed, command, dispatchOnly,
+                transportReady: installed || dispatchOnly,
+                reason: installed ? 'ready' : dispatchOnly ? 'dispatch_only' : result.timedOut ? 'timeout' : 'receiver_unconfirmed',
+                detail: installed ? '알림 앱의 응답을 확인했어요.' : dispatchOnly
+                    ? '앱으로 전송할 수 있어요. 이 안드로이드 버전은 수신 응답을 돌려주지 않으므로 테스트 알림이 실제로 뜨는지 확인해 주세요.' : result.timedOut
                     ? '앱 응답 시간이 초과됐어요. 앱을 한 번 열고 다시 확인해 주세요.'
                     : '앱 응답을 확인하지 못했어요. 앱을 한 번 열고 아래 진단 내용을 확인해 주세요.',
-                diagnostic: installed ? '' : cleanText(result.output, 600),
+                diagnostic: installed || dispatchOnly ? '' : cleanText(result.output, 600),
                 appVersion: result.output.match(/silly-pop-ready:([\d.]+)/)?.[1] || '',
-                notificationAllowed: installed && !/permission=disabled/.test(result.output) };
+                notificationAllowed: dispatchOnly ? null : installed && !/permission=disabled/.test(result.output) };
         }
         lastCompanionCheck = { ...status, checkedAt: Date.now() };
         return lastCompanionCheck;
@@ -136,7 +147,7 @@ function safeUrl(value) {
 
 async function runNotification({ title, content, sound, vibrate, url }) {
         const status = await checkCompanion();
-        if (!status.installed) throw new Error(`${status.detail} ${status.diagnostic || ''}`.trim());
+        if (!status.transportReady) throw new Error(`${status.detail} ${status.diagnostic || ''}`.trim());
         const args = [
             ...broadcastArgs(APP_ACTION),
             '--es', 'title', cleanText(title, 120) || 'Silly-Pop',
@@ -150,10 +161,13 @@ async function runNotification({ title, content, sound, vibrate, url }) {
         if (/notification-permission-disabled/i.test(result.output)) {
             throw new Error('Silly-Pop 앱의 알림 권한 또는 알림 채널이 꺼져 있어요. 앱의 알림 설정을 확인해 주세요.');
         }
-        if (!broadcastCompleted(result.code, result.output)) {
+        const receiptConfirmed = broadcastCompleted(result.code, result.output);
+        const dispatched = broadcastDispatched(result.code, result.output);
+        if (!receiptConfirmed && !dispatched) {
             throw new Error(result.timedOut ? '앱 알림 호출 시간이 초과됐어요.'
                 : `앱의 알림 수신 응답이 없어요. ${cleanText(result.output, 600)}`);
         }
+        return { receiptConfirmed, dispatchOnly: dispatched && !receiptConfirmed };
 }
 
 function booleanValue(value, fallback = false) {
@@ -264,7 +278,7 @@ async function init(router) {
             protocol: PROTOCOL_VERSION,
             appInstalled: status.installed,
             bridgeCommand: bridgeCommandExists(),
-            appReady: status.installed && status.notificationAllowed,
+            appReady: Boolean(status.transportReady && status.notificationAllowed !== false),
             ...status,
         });
     });
@@ -294,14 +308,14 @@ async function init(router) {
 
     router.post('/test', async (request, response) => {
         try {
-            await runNotification({
+            const delivery = await runNotification({
                 title: 'Silly-Pop',
                 content: 'Termux 서버 테스트 알림이에요!',
                 sound: booleanValue(request.body?.sound, true),
                 vibrate: booleanValue(request.body?.vibrate, true),
                 url: safeUrl(request.body?.url),
             });
-            response.json({ ok: true });
+            response.json({ ok: true, ...delivery });
         } catch (error) {
             response.status(500).json({ ok: false, error: error.message });
         }
@@ -317,4 +331,4 @@ async function exit() {
     lastCompanionCheck = { checkedAt: 0, installed: false };
 }
 
-module.exports = { info, init, exit, __test: { broadcastCompleted, bridgeCandidates, broadcastArgs, checkCompanion, runNotification, getMarker, shouldNotify } };
+module.exports = { info, init, exit, __test: { broadcastCompleted, broadcastDispatched, bridgeCandidates, broadcastArgs, checkCompanion, runNotification, getMarker, shouldNotify } };

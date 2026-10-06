@@ -18,6 +18,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.util.Arrays;
 
 public final class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1001;
@@ -133,12 +134,36 @@ public final class MainActivity extends Activity {
         PackageManager packageManager = getPackageManager();
         ComponentName blackAlias = new ComponentName(this, getPackageName() + ".BlackIcon");
         ComponentName whiteAlias = new ComponentName(this, getPackageName() + ".WhiteIcon");
-        // Enable the new icon first so there is never a moment with no launcher entry.
+        // MainActivity lives in its own stable task; only disposable launcher entries change.
         if (announce) {
-            packageManager.setComponentEnabledSetting(white ? whiteAlias : blackAlias,
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
-            packageManager.setComponentEnabledSetting(white ? blackAlias : whiteAlias,
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
+            ComponentName enabled = white ? whiteAlias : blackAlias;
+            ComponentName disabled = white ? blackAlias : whiteAlias;
+            int enabledState = packageManager.getComponentEnabledSetting(enabled);
+            int disabledState = packageManager.getComponentEnabledSetting(disabled);
+            boolean alreadyEnabled = enabledState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                || (enabledState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && !white);
+            boolean alreadyDisabled = disabledState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                || (disabledState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && !white);
+            if (!alreadyEnabled || !alreadyDisabled) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        packageManager.setComponentEnabledSettings(Arrays.asList(
+                            new PackageManager.ComponentEnabledSetting(enabled,
+                                PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP),
+                            new PackageManager.ComponentEnabledSetting(disabled,
+                                PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
+                        ));
+                    } else {
+                        packageManager.setComponentEnabledSetting(enabled,
+                            PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
+                        packageManager.setComponentEnabledSetting(disabled,
+                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
+                    }
+                } catch (RuntimeException error) {
+                    Toast.makeText(this, "화면 색상은 변경됐지만 홈 아이콘 변경에 실패했어요. 앱을 다시 열어 시도해 주세요.", Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
         }
 
         if (announce) {
