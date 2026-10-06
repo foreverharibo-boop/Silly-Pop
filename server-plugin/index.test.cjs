@@ -55,7 +55,7 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.2.1');
+    assert.equal(status.body.version, '2.2.2');
     assert.equal(status.body.appReady, true);
     assert.equal(status.body.appVersion, '0.2.3');
     assert.equal(status.body.command, command);
@@ -66,6 +66,11 @@ async function run() {
     assert.equal(api.shouldNotify({clientId:'test-client', enabled:true, type:'normal'}), true);
     assert.equal(api.shouldNotify({clientId:'test-client', enabled:true, type:'quiet'}), false);
     assert.equal(api.shouldNotify({clientId:'test-client', enabled:false, type:'normal'}), false);
+    // Mobile keepalive requests can arrive in reverse order after switching apps.
+    routes.get.get('/state')({query:{clientId:'reordered',ts:'200',visible:'0',enabled:'1',backgroundOnly:'1',backgroundedDuringGeneration:'1'}}, response());
+    routes.get.get('/state')({query:{clientId:'reordered',ts:'100',visible:'1',enabled:'1',backgroundOnly:'1',backgroundedDuringGeneration:'0'}}, response());
+    assert.equal(api.shouldNotify({clientId:'reordered',enabled:true,type:'normal'}), true,
+        'A delayed foreground request must not overwrite the newer background state');
     const test = response();
     await routes.post.get('/test')({ body: { sound:true, vibrate:true, url:'http://127.0.0.1:8000/' } }, test);
     assert.equal(test.body.ok, true);

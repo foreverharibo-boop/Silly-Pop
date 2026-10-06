@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.2.1';
+const REQUIRED_BRIDGE_VERSION = '2.2.2';
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -24,6 +24,12 @@ let companionState = { installed: false, ready: false, version: '', detail: '확
 let lastToast = { key: '', at: 0 };
 const urgentStateImages = new Set();
 const clientId = getClientId();
+let lastStateTimestamp = 0;
+
+function nextStateTimestamp() {
+    lastStateTimestamp = Math.max(Date.now(), lastStateTimestamp + 1);
+    return lastStateTimestamp;
+}
 
 function getClientId() {
     const key = 'silly-pop-client-id';
@@ -106,20 +112,24 @@ function makeCompanionMarker(type = activeGenerationType) {
         protocol: COMPANION_PROTOCOL_VERSION,
         requestId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         clientId,
+        stateTs: nextStateTimestamp(),
         type: String(type || 'normal'),
         enabled: Boolean(settings.enabled),
         backgroundOnly: Boolean(settings.backgroundOnly),
         sound: Boolean(settings.sound),
         vibrate: Boolean(settings.vibrate),
         visibleAtRequest: isPageForeground(),
-        backgroundedDuringGeneration,
+        backgroundedDuringGeneration: generationActive && backgroundedDuringGeneration,
         url: globalThis.location.href,
         characterName: String(context?.name2 || ''),
     };
 }
 
 function markGenerationPayload(payload, dryRun = false) {
-    if (!companionState.installed || !generationActive || dryRun || !payload || typeof payload !== 'object') return;
+    if (dryRun || !payload || typeof payload !== 'object') return;
+    // Typed requests are authoritative, even when another extension bypassed or
+    // ended GENERATION_STARTED, or the asynchronous connection check is pending.
+    if (!payload.type && !generationActive) return;
     const type = payload.type || activeGenerationType;
     if (!isNotifiableGeneration(type)) return;
     payload.silly_pop = makeCompanionMarker(type);
@@ -139,8 +149,8 @@ function handleGenerationEnded() {
     void sendCompanionState();
 }
 
-function handlePageActivityChange() {
-    if (generationActive && !isPageForeground()) {
+function handlePageActivityChange(forceHidden = false) {
+    if (generationActive && (forceHidden || !isPageForeground())) {
         backgroundedDuringGeneration = true;
     }
 }
@@ -156,7 +166,9 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.1 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.4.2 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+    const generationDetail = root.querySelector('.st-rn-generation-detail');
+    if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-diagnostic');
     diagnostic.hidden = !companionState.diagnostic;
     diagnostic.textContent = companionState.diagnostic || '';
@@ -177,7 +189,8 @@ async function checkCompanion(force = false) {
     if (companionCheckPromise) return companionCheckPromise;
     companionCheckPromise = (async () => {
         try {
-            const response = await fetch(`${COMPANION_API}/status${force ? '?refresh=1' : ''}`, {
+            const statusQuery = new URLSearchParams({clientId, ...(force ? {refresh:'1'} : {})});
+            const response = await fetch(`${COMPANION_API}/status?${statusQuery}`, {
                 cache: 'no-store', signal: AbortSignal.timeout(12000),
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -191,6 +204,10 @@ async function checkCompanion(force = false) {
                 appVersion: String(data.appVersion || ''),
                 dispatchOnly: Boolean(data.dispatchOnly),
                 diagnostic: String(data.diagnostic || ''),
+                generationDetail: data.lastGeneration
+                    ? `최근 답변 (${new Date(data.lastGeneration.at).toLocaleTimeString()}): ${data.lastGeneration.detail}`
+                    : data.unmarkedGenerationAt ? '최근 답변: 알림 표시 없는 생성 요청 감지. 확장 업데이트 후 새로고침해 주세요.'
+                        : '최근 답변: 감지 기록 없음',
                 detail: outdated
                     ? `서버 플러그인이 v${data.version || '?'}예요. 서버 플러그인을 v${REQUIRED_BRIDGE_VERSION} 이상으로 업데이트하고 실리태번을 완전히 재시작해 주세요. 웹 확장 업데이트와는 별개예요.`
                     : data.appInstalled && !allowed
@@ -209,18 +226,18 @@ async function checkCompanion(force = false) {
     try { return await companionCheckPromise; } finally { companionCheckPromise = undefined; }
 }
 
-async function sendCompanionState(urgent = false) {
+async function sendCompanionState(urgent = false, forceHidden = false) {
     if (!companionState.installed) return;
     const params = new URLSearchParams({
         clientId,
-        visible: isPageForeground() ? '1' : '0',
+        visible: !forceHidden && isPageForeground() ? '1' : '0',
         enabled: settings.enabled ? '1' : '0',
         backgroundOnly: settings.backgroundOnly ? '1' : '0',
         backgroundedDuringGeneration: backgroundedDuringGeneration ? '1' : '0',
         sound: settings.sound ? '1' : '0',
         vibrate: settings.vibrate ? '1' : '0',
         url: globalThis.location.href,
-        ts: String(Date.now()),
+        ts: String(nextStateTimestamp()),
     });
 
     if (urgent && typeof Image === 'function') {
@@ -279,7 +296,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.1</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.2</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -288,6 +305,7 @@ function renderSettings() {
                         <button id="st_rn_server_refresh" class="menu_button" type="button">연결 확인</button>
                     </div>
                     <div class="st-rn-versions"></div>
+                    <div class="st-rn-generation-detail st-rn-note"></div>
                     <pre class="st-rn-diagnostic" hidden></pre>
                     <label class="st-rn-row" for="st_rn_enabled"><span><b>답변 완료 알림</b><small>AI 답변 생성이 끝나면 알림을 보냅니다.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_background_only"><span><b>다른 앱을 볼 때만</b><small>실리태번을 보고 있을 때는 알림을 생략합니다.</small></span><input id="st_rn_background_only" type="checkbox" /></label>
@@ -358,10 +376,14 @@ function initialize() {
         handlePageActivityChange();
         void sendCompanionState(true);
     });
-    globalThis.addEventListener('blur', () => {
-        handlePageActivityChange();
-        void sendCompanionState(true);
-    });
+    const sendHiddenState = () => {
+        // During blur/pagehide some mobile browsers still report hasFocus=true.
+        handlePageActivityChange(true);
+        void sendCompanionState(true, true);
+    };
+    globalThis.addEventListener('blur', sendHiddenState);
+    globalThis.addEventListener('pagehide', sendHiddenState);
+    document.addEventListener('freeze', sendHiddenState);
     globalThis.addEventListener('focus', () => {
         handlePageActivityChange();
         void sendCompanionState();

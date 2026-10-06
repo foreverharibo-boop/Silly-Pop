@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.2.1';
+const VERSION = '2.2.2';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -28,6 +28,8 @@ const GENERATION_PATHS = new Set([
 
 const clientStates = new Map();
 const handledRequests = new Map();
+const generationResults = new Map();
+let unmarkedGenerationAt = 0;
 const originalEnd = http.ServerResponse.prototype.end;
 let patched = false;
 let lastCompanionCheck = { checkedAt: 0, installed: false, reason: 'unchecked', detail: '', command: '' };
@@ -184,6 +186,7 @@ function getMarker(request) {
     return {
         requestId: cleanText(marker.requestId, 100),
         clientId: cleanText(marker.clientId, 100),
+        stateTs: Number(marker.stateTs) || 0,
         enabled: booleanValue(marker.enabled, true),
         backgroundOnly: booleanValue(marker.backgroundOnly, true),
         sound: booleanValue(marker.sound, true),
@@ -203,11 +206,20 @@ function pruneState(now = Date.now()) {
     for (const [id, timestamp] of handledRequests) {
         if (now - timestamp > REQUEST_TTL_MS) handledRequests.delete(id);
     }
+    for (const [id, result] of generationResults) {
+        if (now - result.at > CLIENT_TTL_MS) generationResults.delete(id);
+    }
+}
+
+function currentState(marker) {
+    const state = clientStates.get(marker.clientId);
+    // A state from before this request must not override its visibility snapshot.
+    return state && (!marker.stateTs || state.clientTimestamp >= marker.stateTs) ? state : undefined;
 }
 
 function shouldNotify(marker) {
     if (!marker.enabled || ['quiet', 'impersonate'].includes(marker.type)) return false;
-    const state = clientStates.get(marker.clientId);
+    const state = currentState(marker);
     const visible = state ? state.visible : marker.visibleAtRequest;
     const enabled = state ? state.enabled : marker.enabled;
     const backgroundOnly = state ? state.backgroundOnly : marker.backgroundOnly;
@@ -215,23 +227,48 @@ function shouldNotify(marker) {
     return enabled && (!backgroundOnly || !visible || backgrounded);
 }
 
-function handleCompletedResponse(response, marker) {
+function recordGeneration(marker, reason, detail) {
+    generationResults.set(marker.clientId, {at: Date.now(), reason, detail});
+    console.log(`[Silly-Pop] 자동 알림: ${detail}`);
+}
+
+async function handleCompletedResponse(response, marker) {
     const now = Date.now();
     pruneState(now);
     if (handledRequests.has(marker.requestId)) return;
     handledRequests.set(marker.requestId, now);
 
-    if (response.statusCode < 200 || response.statusCode >= 300 || !shouldNotify(marker)) return;
-    const state = clientStates.get(marker.clientId);
+    if (['quiet', 'impersonate'].includes(marker.type)) {
+        recordGeneration(marker, 'excluded', '숨은 생성 또는 사용자 대필 요청이라 생략');
+        return;
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+        recordGeneration(marker, 'http_error', `생성 요청 오류로 생략 (HTTP ${response.statusCode})`);
+        return;
+    }
+    const state = currentState(marker);
+    if (!shouldNotify(marker)) {
+        const enabled = marker.enabled && (state?.enabled ?? true);
+        recordGeneration(marker, enabled ? 'foreground' : 'disabled', enabled
+            ? '실리태번 화면을 보고 있는 것으로 판정되어 생략'
+            : '답변 완료 알림이 꺼져 있어 생략');
+        return;
+    }
     const characterName = marker.characterName;
     const title = characterName ? `${characterName}의 답변이 도착했어요` : '답변이 도착했어요';
-    void runNotification({
-        title,
-        content: '답변 생성이 완료됐어요. 눌러서 확인하세요.',
-        sound: state ? state.sound : marker.sound,
-        vibrate: state ? state.vibrate : marker.vibrate,
-        url: state?.url || marker.url,
-    }).catch(error => console.error('[Silly-Pop] 앱 알림 전송 실패:', error.message));
+    try {
+        const delivery = await runNotification({
+            title,
+            content: '답변 생성이 완료됐어요. 눌러서 확인하세요.',
+            sound: state ? state.sound : marker.sound,
+            vibrate: state ? state.vibrate : marker.vibrate,
+            url: state?.url || marker.url,
+        });
+        recordGeneration(marker, delivery.receiptConfirmed ? 'received' : 'dispatched', delivery.receiptConfirmed
+            ? '앱 수신 응답 확인' : '앱으로 전송 요청 완료 · 실제 수신은 자동 확인 미지원');
+    } catch (error) {
+        recordGeneration(marker, 'failed', `앱 전송 실패: ${cleanText(error.message, 300)}`);
+    }
 }
 
 function patchResponseEnd() {
@@ -244,7 +281,9 @@ function patchResponseEnd() {
                 const marker = getMarker(request);
                 if (marker) {
                     this.__sillyPopTracked = true;
-                    this.once('finish', () => handleCompletedResponse(this, marker));
+                    this.once('finish', () => { void handleCompletedResponse(this, marker); });
+                } else if (!['quiet', 'impersonate'].includes(request?.body?.type)) {
+                    unmarkedGenerationAt = Date.now();
                 }
             }
         } catch (error) {
@@ -279,6 +318,8 @@ async function init(router) {
             appInstalled: status.installed,
             bridgeCommand: bridgeCommandExists(),
             appReady: Boolean(status.transportReady && status.notificationAllowed !== false),
+            lastGeneration: generationResults.get(cleanText(request.query?.clientId, 100)) || null,
+            unmarkedGenerationAt,
             ...status,
         });
     });
@@ -289,7 +330,15 @@ async function init(router) {
         const input = request.method === 'POST' ? request.body || {} : request.query || {};
         const clientId = cleanText(input.clientId, 100);
         if (!clientId) return response.status(400).json({ ok: false, error: 'clientId is required' });
+        const clientTimestamp = Number(input.ts) || 0;
+        const previous = clientStates.get(clientId);
+        // fetch keepalive and the image fallback can arrive late or twice.
+        if (previous && (clientTimestamp > 0 || previous.clientTimestamp > 0)
+            && clientTimestamp <= previous.clientTimestamp) {
+            return response.json({ok: true, stale: true});
+        }
         clientStates.set(clientId, {
+            clientTimestamp,
             visible: booleanValue(input.visible, true),
             enabled: booleanValue(input.enabled, true),
             backgroundOnly: booleanValue(input.backgroundOnly, true),
@@ -328,6 +377,8 @@ async function exit() {
     restoreResponseEnd();
     clientStates.clear();
     handledRequests.clear();
+    generationResults.clear();
+    unmarkedGenerationAt = 0;
     lastCompanionCheck = { checkedAt: 0, installed: false };
 }
 
