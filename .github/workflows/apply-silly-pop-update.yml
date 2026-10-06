@@ -32,7 +32,7 @@ jobs:
         run: npm test
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -54,12 +54,6 @@ jobs:
 
       - name: Prepare APK artifact
         run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.2.0-test.apk
-
-      - name: Remove temporary update helpers
-        run: |
-          git rm 0001-fix-restore-Android-notifications-and-add-icon-theme.patch
-          git rm .github/workflows/apply-silly-pop-update.yml
-          git commit -m "chore: remove update helper"
 
       - name: Push verified update
         run: git push origin HEAD:main
