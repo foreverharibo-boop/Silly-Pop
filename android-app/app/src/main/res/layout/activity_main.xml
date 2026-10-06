@@ -8,7 +8,7 @@
             android:gravity="center_vertical" android:orientation="horizontal" android:layout_marginTop="20dp">
             <FrameLayout android:id="@+id/logoFrame" android:layout_width="60dp" android:layout_height="60dp">
                 <ImageView android:id="@+id/logoImage" android:layout_width="match_parent" android:layout_height="match_parent"
-                    android:padding="9dp" android:contentDescription="@string/app_name" android:src="@drawable/ic_st_modular_white" />
+                    android:padding="9dp" android:contentDescription="@string/app_name" android:src="@drawable/ic_st_modular_black" />
             </FrameLayout>
             <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
                 android:orientation="vertical" android:layout_marginStart="14dp">
@@ -30,17 +30,6 @@
                 <Button android:id="@+id/permissionButton" android:layout_width="wrap_content" android:layout_height="40dp"
                     android:minWidth="0dp" android:minHeight="0dp" android:paddingStart="12dp" android:paddingEnd="12dp"
                     android:text="설정" android:textSize="12sp" android:textAllCaps="false" android:stateListAnimator="@null" />
-            </LinearLayout>
-            <View android:id="@+id/divider" android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="17dp" android:layout_marginBottom="17dp" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:gravity="center_vertical" android:orientation="horizontal">
-                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="화면 · 아이콘" android:textSize="14sp" />
-                <Button android:id="@+id/blackIconButton" android:layout_width="66dp" android:layout_height="36dp"
-                    android:minWidth="0dp" android:minHeight="0dp" android:padding="0dp" android:text="블랙"
-                    android:textSize="11sp" android:textAllCaps="false" android:stateListAnimator="@null" />
-                <Button android:id="@+id/whiteIconButton" android:layout_width="66dp" android:layout_height="36dp"
-                    android:layout_marginStart="6dp" android:minWidth="0dp" android:minHeight="0dp" android:padding="0dp"
-                    android:text="화이트" android:textSize="11sp" android:textAllCaps="false" android:stateListAnimator="@null" />
             </LinearLayout>
         </LinearLayout>
         <Button android:id="@+id/testButton" android:layout_width="match_parent" android:layout_height="46dp"

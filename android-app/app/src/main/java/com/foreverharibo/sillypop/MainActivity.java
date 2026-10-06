@@ -3,7 +3,6 @@ package com.foreverharibo.sillypop;
 import android.Manifest;
 import android.app.Activity;
 import android.app.NotificationManager;
-import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -18,19 +17,13 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
-import java.util.Arrays;
 
 public final class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1001;
-    private static final String KEY_ICON_STYLE = NotificationHelper.KEY_ICON_STYLE;
-    private static final String ICON_BLACK = "black";
-    private static final String ICON_WHITE = "white";
     private TextView permissionStatus;
     private Button permissionButton;
     private FrameLayout logoFrame;
     private ImageView logoImage;
-    private Button blackIconButton;
-    private Button whiteIconButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,15 +42,18 @@ public final class MainActivity extends Activity {
         permissionButton = findViewById(R.id.permissionButton);
         logoFrame = findViewById(R.id.logoFrame);
         logoImage = findViewById(R.id.logoImage);
-        blackIconButton = findViewById(R.id.blackIconButton);
-        whiteIconButton = findViewById(R.id.whiteIconButton);
         Button testButton = findViewById(R.id.testButton);
 
         permissionButton.setOnClickListener(view -> requestNotificationPermission());
         testButton.setOnClickListener(view -> sendTestNotification());
-        blackIconButton.setOnClickListener(view -> setIconStyle(ICON_BLACK, true));
-        whiteIconButton.setOnClickListener(view -> setIconStyle(ICON_WHITE, true));
-        setIconStyle(getSavedIconStyle(), false);
+        logoFrame.setBackgroundResource(R.drawable.bg_logo_white);
+        logoImage.setImageResource(R.drawable.ic_st_modular_black);
+        applyWhiteTheme();
+        // Ignore and remove the old preference; even notifications received before
+        // the first launch after updating now use the fixed white icon.
+        getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
+            .edit().remove("launcher_icon_style").apply();
+        NotificationHelper.refreshNotificationIcons(this);
         updatePermissionUi();
     }
 
@@ -114,65 +110,6 @@ public final class MainActivity extends Activity {
         permissionButton.setText(allowed ? "설정" : "허용하기");
     }
 
-    private String getSavedIconStyle() {
-        return getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
-            .getString(KEY_ICON_STYLE, ICON_BLACK);
-    }
-
-    private void setIconStyle(String style, boolean announce) {
-        boolean white = ICON_WHITE.equals(style);
-        getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
-            .edit()
-            .putString(KEY_ICON_STYLE, white ? ICON_WHITE : ICON_BLACK)
-            .apply();
-
-        logoFrame.setBackgroundResource(white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black);
-        logoImage.setImageResource(white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white);
-        blackIconButton.setText(white ? R.string.icon_black : R.string.icon_black_selected);
-        whiteIconButton.setText(white ? R.string.icon_white_selected : R.string.icon_white);
-        applyTheme(white);
-        if (announce) NotificationHelper.refreshNotificationIcons(this);
-
-        PackageManager packageManager = getPackageManager();
-        ComponentName blackAlias = new ComponentName(this, getPackageName() + ".BlackIcon");
-        ComponentName whiteAlias = new ComponentName(this, getPackageName() + ".WhiteIcon");
-        // MainActivity lives in its own stable task; only disposable launcher entries change.
-        if (announce) {
-            ComponentName enabled = white ? whiteAlias : blackAlias;
-            ComponentName disabled = white ? blackAlias : whiteAlias;
-            int enabledState = packageManager.getComponentEnabledSetting(enabled);
-            int disabledState = packageManager.getComponentEnabledSetting(disabled);
-            boolean alreadyEnabled = enabledState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-                || (enabledState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && !white);
-            boolean alreadyDisabled = disabledState == PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-                || (disabledState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && !white);
-            if (!alreadyEnabled || !alreadyDisabled) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        packageManager.setComponentEnabledSettings(Arrays.asList(
-                            new PackageManager.ComponentEnabledSetting(enabled,
-                                PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP),
-                            new PackageManager.ComponentEnabledSetting(disabled,
-                                PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP)
-                        ));
-                    } else {
-                        packageManager.setComponentEnabledSetting(enabled,
-                            PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
-                        packageManager.setComponentEnabledSetting(disabled,
-                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
-                    }
-                } catch (RuntimeException error) {
-                    Toast.makeText(this, "화면 색상은 변경됐지만 홈 아이콘 변경에 실패했어요. 앱을 다시 열어 시도해 주세요.", Toast.LENGTH_LONG).show();
-                    return;
-                }
-            }
-        }
-
-        if (announce) {
-            Toast.makeText(this, white ? "화이트로 바꿨어요." : "블랙으로 바꿨어요.", Toast.LENGTH_SHORT).show();
-        }
-    }
-
     private GradientDrawable rounded(int fill, int border, int radius) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fill);
@@ -191,30 +128,25 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void applyTheme(boolean white) {
-        int background = Color.parseColor(white ? "#FFFFFF" : "#101010");
-        int surface = Color.parseColor(white ? "#F7F7F7" : "#1B1B1B");
-        int primary = Color.parseColor(white ? "#151515" : "#F5F5F5");
-        int secondary = Color.parseColor(white ? "#707070" : "#A6A6A6");
-        int border = Color.parseColor(white ? "#E3E3E3" : "#333333");
+    private void applyWhiteTheme() {
+        int background = Color.parseColor("#FFFFFF");
+        int surface = Color.parseColor("#F7F7F7");
+        int primary = Color.parseColor("#151515");
+        int secondary = Color.parseColor("#707070");
+        int border = Color.parseColor("#E3E3E3");
         View root = findViewById(R.id.screenRoot);
         root.setBackgroundColor(background);
         colorText(root, primary, secondary);
         findViewById(R.id.settingsCard).setBackground(rounded(surface, border, 16));
-        findViewById(R.id.divider).setBackgroundColor(border);
         permissionButton.setBackground(rounded(surface, border, 10));
         Button test = findViewById(R.id.testButton);
         test.setBackground(rounded(primary, primary, 12));
         test.setTextColor(background);
-        blackIconButton.setBackground(rounded(Color.BLACK, white ? border : primary, 9));
-        blackIconButton.setTextColor(Color.WHITE);
-        whiteIconButton.setBackground(rounded(Color.WHITE, white ? primary : border, 9));
-        whiteIconButton.setTextColor(Color.BLACK);
         ((ImageView) findViewById(R.id.privacyIcon)).setColorFilter(secondary);
         getWindow().setStatusBarColor(background);
         getWindow().setNavigationBarColor(background);
-        getWindow().getDecorView().setSystemUiVisibility(white
-            ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+        getWindow().getDecorView().setSystemUiVisibility(
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         updatePermissionUi();
     }
 

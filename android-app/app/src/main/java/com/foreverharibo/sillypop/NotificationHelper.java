@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class NotificationHelper {
     public static final String PREFERENCES = "silly_pop_settings";
-    public static final String KEY_ICON_STYLE = "launcher_icon_style";
     public static final String KEY_LAST_URL = "last_silly_url";
     public static final String DEFAULT_SILLY_URL = "http://127.0.0.1:8000/";
 
@@ -86,7 +85,7 @@ public final class NotificationHelper {
         Intent target = createOpenIntent(context, url);
         Notification.Builder builder = new Notification.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(createThemeIcon(context))
+            .setLargeIcon(createWhiteIcon(context))
             .setContentTitle(title)
             .setContentText(body)
             .setCategory(Notification.CATEGORY_MESSAGE)
@@ -132,16 +131,14 @@ public final class NotificationHelper {
         }
     }
 
-    private static Bitmap createThemeIcon(Context context) {
-        boolean white = "white".equals(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .getString(KEY_ICON_STYLE, "black"));
+    private static Bitmap createWhiteIcon(Context context) {
         int size = Math.round(64 * context.getResources().getDisplayMetrics().density);
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        Drawable background = context.getDrawable(white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black);
+        Drawable background = context.getDrawable(R.drawable.bg_logo_white);
         background.setBounds(0, 0, size, size);
         background.draw(canvas);
-        Drawable logo = context.getDrawable(white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white);
+        Drawable logo = context.getDrawable(R.drawable.ic_st_modular_black);
         int inset = Math.round(size * 0.14f);
         logo.setBounds(inset, inset, size - inset, size - inset);
         logo.draw(canvas);
@@ -151,7 +148,7 @@ public final class NotificationHelper {
     public static void refreshNotificationIcons(Context context) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (manager == null || !canNotify(context)) return;
-        Bitmap icon = createThemeIcon(context);
+        Bitmap icon = createWhiteIcon(context);
         try {
             for (StatusBarNotification posted : manager.getActiveNotifications()) {
                 Notification updated = Notification.Builder.recoverBuilder(context, posted.getNotification())
@@ -161,7 +158,7 @@ public final class NotificationHelper {
                 manager.notify(posted.getTag(), posted.getId(), updated);
             }
         } catch (SecurityException ignored) {
-            // A concurrent permission change must not interrupt theme switching.
+            // A concurrent permission change must not interrupt the settings screen.
         }
     }
 

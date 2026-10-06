@@ -18,9 +18,9 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher_black"
+        android:icon="@mipmap/ic_launcher_white"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_black_round"
+        android:roundIcon="@mipmap/ic_launcher_white_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SillyPop">
 
@@ -37,13 +37,16 @@
             android:theme="@android:style/Theme.NoDisplay"
             android:exported="true" />
 
+        <!-- Preserve both legacy component names and their enabled defaults so
+             updates keep existing home shortcuts and per-user component states.
+             Both entries now use the same white icon; there is no theme switch. -->
         <activity-alias
             android:name=".BlackIcon"
             android:enabled="true"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher_black"
+            android:icon="@mipmap/ic_launcher_white"
             android:label="@string/app_name"
-            android:roundIcon="@mipmap/ic_launcher_black_round"
+            android:roundIcon="@mipmap/ic_launcher_white_round"
             android:targetActivity=".LauncherActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

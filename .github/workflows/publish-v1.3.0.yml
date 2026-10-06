@@ -42,7 +42,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Test launcher switching and notification receipt on Android 15
+      - name: Test white icons, legacy launchers and notification receipt on Android 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -78,31 +78,30 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.6-test.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.6-test.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.7-test.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.7-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.2.6-test
-          path: Silly-Pop-v0.2.6-test.apk
+          name: Silly-Pop-v0.2.7-test
+          path: Silly-Pop-v0.2.7-test.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish test release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.6-test
-          name: Silly-Pop v0.2.6-test
+          tag_name: v0.2.7-test
+          name: Silly-Pop v0.2.7-test
           prerelease: true
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v0.2.6 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v0.2.7 테스트 버전입니다.
 
-            - 선택한 S 곡선과 작은 별 로고를 홈 아이콘, 앱 화면, 알림 이미지에 적용
-            - 아이콘 안에 여백을 넉넉하게 유지
-            - 앱 하단 버전 표시를 실제 설치 버전과 자동 연동
-            - 앱 화면·홈 아이콘·알림 본문 이미지의 블랙/화이트 설정 유지
-            - 삼성 간략한 팝업의 시스템 앱 아이콘 색상 자동 연동은 미지원
+            - 앱 기본 아이콘·홈 아이콘·알림 이미지를 흰 배경과 검정 S·별 로고로 통일
+            - 삼성 팝업이 참조하는 기본 앱 아이콘도 화이트로 변경
+            - 블랙 테마와 색상 선택 UI 제거, 앱 화면은 화이트로 고정
+            - 기존 블랙/화이트 홈 바로가기는 업데이트 후에도 실행 가능
             - 기존 자동 알림 감지·전송 방식 유지, 서버/확장 추가 업데이트 불필요
             - 0.2.1 이상에서 삭제 없이 덮어 설치 가능
-          files: Silly-Pop-v0.2.6-test.apk
+          files: Silly-Pop-v0.2.7-test.apk

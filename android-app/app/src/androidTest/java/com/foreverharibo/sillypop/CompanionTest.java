@@ -4,7 +4,6 @@ import static org.junit.Assert.*;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.ActivityManager;
 import android.app.Instrumentation;
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -20,6 +19,8 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.ColorDrawable;
+import android.widget.TextView;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -67,69 +68,68 @@ public final class CompanionTest {
     }
 
     @Test
-    public void switchingIconsKeepsScreenAliveAndReceiverPostsNotification() throws Exception {
+    public void whiteIconsIgnoreOldPreferenceAndBothLegacyLaunchersStillWork() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Context context = instrumentation.getTargetContext();
         String packageName = context.getPackageName();
         if (Build.VERSION.SDK_INT >= 33) {
             instrumentation.getUiAutomation().grantRuntimePermission(packageName, Manifest.permission.POST_NOTIFICATIONS);
         }
-        Instrumentation.ActivityMonitor monitor = instrumentation.addMonitor(MainActivity.class.getName(), null, false);
-        context.startActivity(new Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_LAUNCHER)
-            .setComponent(new ComponentName(packageName, packageName + ".BlackIcon"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        Activity screen = monitor.waitForActivityWithTimeout(10000);
-        instrumentation.removeMonitor(monitor);
-        assertNotNull("Launcher must open settings", screen);
-        instrumentation.waitForIdleSync();
-
-        ActivityManager manager = context.getSystemService(ActivityManager.class);
-        boolean stableRoot = false;
-        for (ActivityManager.AppTask task : manager.getAppTasks()) {
-            ActivityManager.RecentTaskInfo info;
-            try {
-                info = task.getTaskInfo();
-            } catch (IllegalArgumentException removedTask) {
-                // The disposable launcher can finish between enumeration and lookup.
-                continue;
-            }
-            if (info.taskId == screen.getTaskId()) {
-                stableRoot = new ComponentName(context, MainActivity.class).equals(info.baseActivity);
-            }
-        }
-        assertTrue("Settings task must not be rooted at an icon alias", stableRoot);
-
+        PackageManager pm = context.getPackageManager();
+        // The system/Samsung popup reads the application icon, independently of
+        // the notification bitmap. Check that source as well as both launchers.
+        assertWhiteIcon(pm.getApplicationIcon(packageName));
+        assertWhiteIcon(context.getDrawable(R.mipmap.ic_launcher_white_round));
         NotificationManager notifications = context.getSystemService(NotificationManager.class);
         notifications.cancelAll();
-        assertTrue(NotificationHelper.show(context, "ThemeRegression", "Keep this text",
+        assertTrue(context.getSharedPreferences(NotificationHelper.PREFERENCES, Context.MODE_PRIVATE)
+            .edit().putString("launcher_icon_style", "black").commit());
+        assertTrue(NotificationHelper.show(context, "WhiteRegression", "Keep this text",
             NotificationHelper.DEFAULT_SILLY_URL, false, false));
         StatusBarNotification original = notifications.getActiveNotifications()[0];
+        assertWhiteNotification(context, original.getNotification());
 
-        int[] buttons = { R.id.whiteIconButton, R.id.blackIconButton, R.id.whiteIconButton };
-        for (int button : buttons) {
-            instrumentation.runOnMainSync(() -> screen.findViewById(button).performClick());
-            instrumentation.waitForIdleSync();
-            SystemClock.sleep(1500); // Allow asynchronous launcher/package changes to settle.
-            instrumentation.runOnMainSync(() -> {
-                assertFalse("Theme switch must not finish settings", screen.isFinishing());
-                assertFalse("Theme switch must not destroy settings", screen.isDestroyed());
-                assertTrue("Settings must remain visible", screen.hasWindowFocus());
-            });
-            boolean white = button == R.id.whiteIconButton;
-            PackageManager pm = context.getPackageManager();
-            assertEquals(PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                pm.getComponentEnabledSetting(new ComponentName(packageName, packageName + (white ? ".WhiteIcon" : ".BlackIcon"))));
-            assertEquals(PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                pm.getComponentEnabledSetting(new ComponentName(packageName, packageName + (white ? ".BlackIcon" : ".WhiteIcon"))));
-            StatusBarNotification[] active = notifications.getActiveNotifications();
-            assertEquals("Theme update must not add another notification", 1, active.length);
-            assertEquals(original.getId(), active[0].getId());
-            Notification updated = active[0].getNotification();
-            assertEquals("Keep this text", updated.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
-            assertEquals(original.getNotification().when, updated.when);
-            assertTrue((updated.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
-            assertIconTheme(context, updated, white);
+        ComponentName black = new ComponentName(packageName, packageName + ".BlackIcon");
+        ComponentName white = new ComponentName(packageName, packageName + ".WhiteIcon");
+        try {
+            // Simulate component states retained from either pre-update theme.
+            for (ComponentName entry : new ComponentName[]{black, white}) {
+                pm.setComponentEnabledSetting(entry, PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
+                pm.setComponentEnabledSetting(entry.equals(black) ? white : black,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
+                assertWhiteIcon(pm.getActivityIcon(entry));
+                Instrumentation.ActivityMonitor monitor = instrumentation.addMonitor(MainActivity.class.getName(), null, false);
+                context.startActivity(new Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER).setComponent(entry)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                Activity screen = monitor.waitForActivityWithTimeout(10000);
+                instrumentation.removeMonitor(monitor);
+                assertNotNull("Either legacy launcher must still open settings", screen);
+                instrumentation.waitForIdleSync();
+                instrumentation.runOnMainSync(() -> {
+                    assertFalse(screen.isFinishing());
+                    assertFalse(screen.isDestroyed());
+                    assertEquals(Color.WHITE, ((ColorDrawable) screen.findViewById(R.id.screenRoot).getBackground()).getColor());
+                    assertTrue(((TextView) screen.findViewById(R.id.versionFooter)).getText().toString()
+                        .contains(BuildConfig.VERSION_NAME));
+                });
+                assertFalse(context.getSharedPreferences(NotificationHelper.PREFERENCES, Context.MODE_PRIVATE)
+                    .contains("launcher_icon_style"));
+                StatusBarNotification[] active = notifications.getActiveNotifications();
+                assertEquals("Refreshing an old notification must not duplicate it", 1, active.length);
+                assertEquals(original.getId(), active[0].getId());
+                Notification updated = active[0].getNotification();
+                assertEquals("Keep this text", updated.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
+                assertEquals(original.getNotification().when, updated.when);
+                assertTrue((updated.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
+                assertWhiteNotification(context, updated);
+                instrumentation.runOnMainSync(screen::finish);
+                instrumentation.waitForIdleSync();
+            }
+        } finally {
+            pm.setComponentEnabledSetting(black, PackageManager.COMPONENT_ENABLED_STATE_DEFAULT, PackageManager.DONT_KILL_APP);
+            pm.setComponentEnabledSetting(white, PackageManager.COMPONENT_ENABLED_STATE_DEFAULT, PackageManager.DONT_KILL_APP);
         }
 
         notifications.cancelAll();
@@ -150,25 +150,28 @@ public final class CompanionTest {
                     received = true;
                     assertNull("No installed localhost WebAPK: notification must not open a browser",
                         posted.getNotification().contentIntent);
-                    assertIconTheme(context, posted.getNotification(), true);
+                    assertWhiteNotification(context, posted.getNotification());
                 }
             }
             if (!received) SystemClock.sleep(100);
         }
-        assertTrue("External broadcast must post a system notification after icon switches", received);
+        assertTrue("External broadcast must still post a white system notification", received);
         notifications.cancelAll();
-        instrumentation.runOnMainSync(screen::finish);
     }
 
-    private static void assertIconTheme(Context context, Notification notification, boolean white) {
-        assertNotNull("Notification must carry its selected ST icon", notification.getLargeIcon());
-        Drawable icon = notification.getLargeIcon().loadDrawable(context);
+    private static void assertWhiteNotification(Context context, Notification notification) {
+        assertNotNull("Notification must carry its white S-star icon", notification.getLargeIcon());
+        assertWhiteIcon(notification.getLargeIcon().loadDrawable(context));
+    }
+
+    private static void assertWhiteIcon(Drawable icon) {
+        assertNotNull(icon);
         Bitmap rendered = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
         icon.setBounds(0, 0, 64, 64);
         icon.draw(new Canvas(rendered));
-        int pixel = rendered.getPixel(32, 8); // Inside background, above the ST mark.
+        int pixel = rendered.getPixel(32, 8); // Inside background, above the logo.
         assertEquals(255, Color.alpha(pixel));
-        assertTrue("Icon background must match the selected theme",
-            white ? Color.red(pixel) > 240 : Color.red(pixel) < 20);
+        assertTrue("App, launcher and notification backgrounds must all be white",
+            Color.red(pixel) > 240 && Color.green(pixel) > 240 && Color.blue(pixel) > 240);
     }
 }
