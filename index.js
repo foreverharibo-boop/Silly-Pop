@@ -44,7 +44,7 @@ function saveSettings() {
     getContext()?.saveSettingsDebounced?.();
 }
 
-function toast(type, message, title = '답변 도착 알림') {
+function toast(type, message, title = 'Silly-Pop') {
     if (globalThis.toastr?.[type]) {
         globalThis.toastr[type](message, title);
         return;
@@ -192,12 +192,12 @@ async function showSystemNotification({ title, body, test = false }) {
         await registration.showNotification(title, options);
         return true;
     } catch (error) {
-        console.warn('[답변 도착 알림] 서비스 워커 알림 실패, 일반 알림으로 재시도합니다.', error);
+        console.warn('[Silly-Pop] 서비스 워커 알림 실패, 일반 알림으로 재시도합니다.', error);
         try {
             new Notification(title, options);
             return true;
         } catch (fallbackError) {
-            console.error('[답변 도착 알림] 알림 표시 실패', fallbackError);
+            console.error('[Silly-Pop] 알림 표시 실패', fallbackError);
             if (test) toast('error', '테스트 알림을 표시하지 못했어요. 브라우저 알림 설정을 확인해 주세요.');
             return false;
         }
@@ -273,7 +273,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>답변 도착 알림</b><small>v1.1.0</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.1.1</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -303,7 +303,7 @@ function renderSettings() {
     root.querySelector('#st_rn_test').addEventListener('click', async () => {
         const permission = await requestNotificationPermission();
         if (permission !== 'granted') return;
-        const shown = await showSystemNotification({ title: '답변 도착 알림', body: '테스트 알림이에요. 정상적으로 작동하고 있어요!', test: true });
+        const shown = await showSystemNotification({ title: 'Silly-Pop', body: '테스트 알림이에요. 정상적으로 작동하고 있어요!', test: true });
         if (shown) toast('success', '테스트 알림을 보냈어요.');
     });
     updatePermissionStatus();
@@ -316,7 +316,7 @@ function initialize() {
     const context = getContext();
     const eventTypes = context?.eventTypes || context?.event_types;
     if (!context?.eventSource || !eventTypes?.MESSAGE_RECEIVED) {
-        console.error('[답변 도착 알림] SillyTavern 이벤트 API를 찾지 못했습니다.');
+        console.error('[Silly-Pop] SillyTavern 이벤트 API를 찾지 못했습니다.');
         return;
     }
 
@@ -326,7 +326,7 @@ function initialize() {
 
     if (supportsNotifications()) {
         void ensureServiceWorker().catch(error => {
-            console.warn('[답변 도착 알림] 서비스 워커 등록 실패', error);
+            console.warn('[Silly-Pop] 서비스 워커 등록 실패', error);
             updatePermissionStatus();
         });
     }
