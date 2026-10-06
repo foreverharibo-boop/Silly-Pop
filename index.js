@@ -36,6 +36,26 @@ let lastStateTimestamp = 0;
 const diagnosticEvents = [];
 let probeDetail = '전송 경로 검사: 연결 확인을 누르면 검사합니다.';
 let pendingQuietReply;
+let publicationDetail = '최종 답변: 게시 신호 대기';
+const loadedAt = Date.now();
+const knownPublishedReplies = new Set();
+
+function publishedIdentity(context, reply) {
+    const chatKey = currentChatKey(context);
+    return chatKey === null ? null : `${chatKey}:${reply.key}`;
+}
+
+function rememberPublishedReplies() {
+    const context = getContext();
+    if (!Array.isArray(context?.chat)) return;
+    context.chat.forEach((message, index) => {
+        for (let swipe = 0; swipe < Math.max(message.swipes?.length || 0, 1); swipe++) {
+            const reply = publishedReply(message, index, swipe);
+            const identity = reply && publishedIdentity(context, reply);
+            if (identity) knownPublishedReplies.add(identity);
+        }
+    });
+}
 
 function currentChatKey(context) {
     const id = context?.getCurrentChatId?.() ?? context?.chatId;
@@ -52,7 +72,8 @@ function publishedReply(message, index, swipeId = message?.swipe_id ?? 0) {
     }
     const generationId = swipe?.extra?.hundredlog ? swipe.gen_id
         : swipeId === (message.swipe_id ?? 0) && message.extra?.hundredlog ? message.extra.gen_id : null;
-    if (generationId) return { source: 'hundredlog', key: JSON.stringify(['hundredlog', index, generationId]) };
+    if (generationId) return { source: 'hundredlog', completedAt: Number(generationId),
+        key: JSON.stringify(['hundredlog', index, generationId]) };
     return null;
 }
 
@@ -79,24 +100,37 @@ function watchQuietReply() {
         backgrounded: !isPageForeground(), requestId: makeCompanionMarker('published').requestId };
 }
 
-function handlePublishedReply(index) {
-    const pending = pendingQuietReply;
-    if (!pending) return;
+function handlePublishedReply(index, type, allowDirect = true) {
+    let pending = pendingQuietReply;
     const context = getContext();
-    if (Date.now() - pending.startedAt >= 30 * 60 * 1000 || currentChatKey(context) !== pending.chatKey
-        || (pending.chatKey === null && context?.chat !== pending.chat)) {
+    if (pending && (Date.now() - pending.startedAt >= 30 * 60 * 1000 || currentChatKey(context) !== pending.chatKey
+        || (pending.chatKey === null && context?.chat !== pending.chat))) {
         pendingQuietReply = undefined;
-        return;
+        pending = undefined;
     }
     const message = context?.chat?.[index];
     const reply = publishedReply(message, index);
-    if (!reply || pending.known.has(reply.key) || !String(message.mes || '').trim()) return;
+    if (!reply || !String(message.mes || '').trim()) return;
+    const identity = publishedIdentity(context, reply);
+    if (identity && knownPublishedReplies.has(identity)) return;
+    // 100LOG's generation ID is a completion timestamp, set at commitReply.
+    // Its explicit final render is sufficient even if STARTED was absent or reset.
+    // Never use chat reload alone as evidence of a new 100LOG reply.
+    const direct = allowDirect && type !== 'first_message' && identity && reply.source === 'hundredlog'
+        && reply.completedAt >= loadedAt && reply.completedAt <= Date.now() + 1000;
+    if (!direct && (!pending || pending.known.has(reply.key))) {
+        publicationDetail = '최종 답변: 게시 신호 도착 · 기존 답변 또는 새 생성 확인 불가';
+        try { updateGenerationDiagnostic(); } catch { /* Diagnostics never block publication. */ }
+        return;
+    }
+    if (identity) knownPublishedReplies.add(identity);
     // Clear before scheduling I/O: duplicate render/reload events cannot dispatch twice.
     pendingQuietReply = undefined;
     const marker = makeCompanionMarker('published');
-    marker.requestId = pending.requestId;
-    marker.backgroundedDuringGeneration = pending.backgrounded;
-    traceGeneration(`최종 답변 게시 감지 (${reply.source === 'hundredlog' ? '100LOG' : 'inSTead'})`);
+    if (pending) marker.requestId = pending.requestId;
+    marker.backgroundedDuringGeneration = Boolean(pending?.backgrounded);
+    publicationDetail = `최종 답변 게시 감지 (${reply.source === 'hundredlog' ? '100LOG' : 'inSTead'})`;
+    traceGeneration(publicationDetail);
     void (async () => {
         try {
             const response = await fetch(`${COMPANION_API}/completed`, {
@@ -105,9 +139,11 @@ function handlePublishedReply(index) {
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const result = await response.json();
-            traceGeneration(`최종 답변 알림: ${result.result?.detail || '서버 접수'}`);
+            publicationDetail = `최종 답변 알림: ${result.result?.detail || '서버 접수'}`;
+            traceGeneration(publicationDetail);
         } catch (error) {
-            traceGeneration(`최종 답변 알림 전송 실패: ${String(error.message).slice(0, 100)}`);
+            publicationDetail = `최종 답변 알림 전송 실패: ${String(error.message).slice(0, 100)}`;
+            traceGeneration(publicationDetail);
         }
     })();
 }
@@ -115,9 +151,10 @@ function handlePublishedReply(index) {
 function handleReplyChatChanged() {
     // inSTead saves and reloads the chat instead of emitting a render event.
     const chat = getContext()?.chat;
-    if (!pendingQuietReply || !Array.isArray(chat)) return;
-    for (let index = 0; index < chat.length && pendingQuietReply; index++) handlePublishedReply(index);
+    if (!Array.isArray(chat)) return;
+    for (let index = 0; index < chat.length && pendingQuietReply; index++) handlePublishedReply(index, undefined, false);
     if (pendingQuietReply && currentChatKey(getContext()) !== pendingQuietReply.chatKey) pendingQuietReply = undefined;
+    rememberPublishedReplies();
 }
 
 function traceGeneration(detail) {
@@ -144,6 +181,7 @@ function updateGenerationDiagnostic() {
     output.textContent = [
         `요청 감시: ${globalThis.fetch?.__sillyPopTransport ? '연결됨' : '다른 코드가 감싸거나 교체함'}`,
         `생성 이벤트: ${binding}`,
+        publicationDetail,
         probeDetail,
         '이 탭의 최근 기록 (새로고침하면 초기화):',
         ...(diagnosticEvents.length ? diagnosticEvents : ['아직 생성 기록 없음']),
@@ -372,7 +410,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.5 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.4.6 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -508,7 +546,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.5</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.6</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -565,6 +603,7 @@ function renderSettings() {
 
 function initialize() {
     settings = getSettings();
+    rememberPublishedReplies();
     installRequestHook();
     renderSettings();
 

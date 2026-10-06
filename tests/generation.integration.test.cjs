@@ -279,6 +279,39 @@ async function generate(client,payload) {
     assert.equal(notificationCalls().length,6);
     const invalid=await fetch(`${baseUrl}/api/plugins/silly-pop/completed`,{method:'POST',body:JSON.stringify({source:'unknown',silly_pop:marker})});
     assert.equal(invalid.status,400); await invalid.json();
+
+    // Regression: a final 100LOG commit must not depend on quiet STARTED.
+    // The old implementation silently dropped both of these final renders.
+    const eventless=browser('published-without-start');
+    eventless.context.extensionSettings.response_notifier.backgroundOnly=false;
+    await eventless.sandbox.testApi.checkCompanion();
+    let completedAt=Date.now();
+    for (const scenario of ['no-start','reset-start']) {
+        if (scenario==='reset-start') {
+            eventless.events.get('started')('quiet',{},false);
+            eventless.events.get('started')('normal',{},false);
+        }
+        eventless.context.chat.push({is_user:false,mes:'new final reply',swipes:['new final reply'],swipe_id:0,
+            extra:{hundredlog:true,gen_id:completedAt++}});
+        const index=eventless.context.chat.length-1;
+        const before=notificationCalls().length;
+        eventless.events.get('rendered')(index);
+        await until(()=>notificationCalls().length===before+1,`${scenario}: published reply was lost`);
+        eventless.events.get('rendered')(index);
+        eventless.events.get('chatChanged')();
+        await Promise.all([...requests]);
+        assert.equal(notificationCalls().length,before+1,'re-rendering final reply must not duplicate');
+    }
+    // Historical messages must not notify even if first rendered after startup.
+    eventless.context.chat.push({mes:'old reply',extra:{hundredlog:true,gen_id:1}});
+    eventless.events.get('rendered')(2);
+    // Loading another chat containing a recent answer must seed the baseline.
+    eventless.context.chatId='loaded-other-chat';
+    eventless.context.chat=[{mes:'loaded reply',extra:{hundredlog:true,gen_id:Date.now()}}];
+    eventless.events.get('chatChanged')();
+    eventless.events.get('rendered')(0);
+    await Promise.all([...requests]);
+    assert.equal(notificationCalls().length,8,'history and chat loading must stay silent');
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, quiet, errors, 100LOG final publication, inSTead reload, cancellation, historical swipes).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();
