@@ -42,7 +42,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Test white icons, legacy launchers and notification receipt on Android 15
+      - name: Test authentication, white icons and notification receipt on Android 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -69,7 +69,7 @@ jobs:
           test -n "$SILLY_POP_KEYSTORE_BASE64"
           echo "$SILLY_POP_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/silly-pop-release.jks"
 
-      - name: Build signed test APK
+      - name: Build signed APK
         working-directory: android-app
         env:
           SILLY_POP_SIGNING_STORE_FILE: ${{ runner.temp }}/silly-pop-release.jks
@@ -78,29 +78,31 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.8-test.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.8-test.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v1.0.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v1.0.0.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.2.8-test
-          path: Silly-Pop-v0.2.8-test.apk
+          name: Silly-Pop-v1.0.0
+          path: Silly-Pop-v1.0.0.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish test release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.8-test
-          name: Silly-Pop v0.2.8-test
-          prerelease: true
+          tag_name: v1.0.0
+          name: Silly-Pop v1.0.0
+          prerelease: false
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v0.2.8 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v1.0.0입니다.
 
-            - 답변 알림 아래의 설명 문구를 제거하고 제목만 표시
-            - 알림을 펼쳐도 별도 본문 문구 없이 표시
-            - 화이트 아이콘과 기존 자동 알림 감지·전송 방식 유지
-            - 앱만 덮어 설치하면 적용, 서버/확장 추가 업데이트 불필요
+            - 앱과 Termux의 기기별 연결 키로 알림 요청 인증
+            - 서명 없는 요청, 변조된 요청, 만료·재전송 요청 차단
+            - 화이트 아이콘과 제목만 표시하는 알림 유지
+            - 서버 플러그인 2.4.0 업데이트 및 재시작 필요 (웹 확장 1.5.0 유지)
+            - 앱의 ‘연결 명령 복사’를 눌러 Termux 새 세션에 최초 한 번 붙여넣기
+            - 연결 명령에는 비밀 키가 있으므로 공유 금지, 앱 삭제·데이터 초기화 시 다시 연결
             - 0.2.1 이상에서 삭제 없이 덮어 설치 가능
-          files: Silly-Pop-v0.2.8-test.apk
+          files: Silly-Pop-v1.0.0.apk

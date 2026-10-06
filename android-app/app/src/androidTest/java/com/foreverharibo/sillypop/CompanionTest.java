@@ -21,6 +21,10 @@ import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.ColorDrawable;
 import android.widget.TextView;
+import java.nio.charset.StandardCharsets;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import org.json.JSONObject;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -133,15 +137,22 @@ public final class CompanionTest {
         }
 
         notifications.cancelAll();
-        try (ParcelFileDescriptor output = instrumentation.getUiAutomation().executeShellCommand(
-                "am broadcast --receiver-foreground --include-stopped-packages -n " + packageName
-                + "/.SillyPopReceiver -a " + SillyPopReceiver.ACTION_NOTIFY
-                + " --es title CompanionRegression --es body DeliveryTest --ez sound false --ez vibrate false")) {
-            try (ParcelFileDescriptor.AutoCloseInputStream stream = new ParcelFileDescriptor.AutoCloseInputStream(output)) {
-                byte[] buffer = new byte[1024];
-                while (stream.read(buffer) != -1) { /* Wait for the external command to finish. */ }
-            }
-        }
+        String prefix = "am broadcast --receiver-foreground --include-stopped-packages -n " + packageName
+            + "/.SillyPopReceiver -a " + SillyPopReceiver.ACTION_NOTIFY;
+        assertTrue(shell(instrumentation, prefix
+            + " --es title Forged --es url http://attacker.invalid/ --ez sound true").contains("authentication-failed"));
+        assertEquals(0, notifications.getActiveNotifications().length);
+        JSONObject payload = new JSONObject().put("v", 1).put("action", SillyPopReceiver.ACTION_NOTIFY)
+            .put("ts", System.currentTimeMillis()).put("nonce", java.util.UUID.randomUUID().toString().replace("-", ""))
+            .put("title", "CompanionRegression").put("url", NotificationHelper.DEFAULT_SILLY_URL)
+            .put("sound", false).put("vibrate", false);
+        String raw = payload.toString();
+        String signature = sign(raw, BridgeAuth.getOrCreateKey(context));
+        String command = prefix + " --es payload " + quote(raw) + " --es signature " + signature;
+        assertTrue(shell(instrumentation, prefix + " --es payload " + quote(raw.replace("CompanionRegression", "Forged"))
+            + " --es signature " + signature).contains("authentication-failed"));
+        assertEquals(0, notifications.getActiveNotifications().length);
+        assertTrue(shell(instrumentation, command).contains("data=\"ok\""));
         boolean received = false;
         for (int attempt = 0; attempt < 30 && !received; attempt++) {
             for (StatusBarNotification posted : notifications.getActiveNotifications()) {
@@ -155,8 +166,37 @@ public final class CompanionTest {
             }
             if (!received) SystemClock.sleep(100);
         }
-        assertTrue("External broadcast must still post a white system notification", received);
+        assertTrue("Authenticated external broadcast must still post a white system notification", received);
         notifications.cancelAll();
+        assertTrue(shell(instrumentation, command).contains("authentication-failed"));
+        assertEquals("Replayed notification must be rejected", 0, notifications.getActiveNotifications().length);
+    }
+
+    static String quote(String value) { return "'" + value.replace("'", "'\"'\"'") + "'"; }
+
+    static String shell(Instrumentation instrumentation, String command) throws Exception {
+        ParcelFileDescriptor[] pipes = instrumentation.getUiAutomation().executeShellCommandRw("sh");
+        try (ParcelFileDescriptor.AutoCloseOutputStream input = new ParcelFileDescriptor.AutoCloseOutputStream(pipes[1])) {
+            input.write((command + "\nexit\n").getBytes(StandardCharsets.UTF_8));
+        }
+        try (ParcelFileDescriptor.AutoCloseInputStream stream = new ParcelFileDescriptor.AutoCloseInputStream(pipes[0]);
+             java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream()) {
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = stream.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            return bytes.toString("UTF-8");
+        }
+    }
+
+    static String sign(String payload, String hexKey) throws Exception {
+        byte[] key = new byte[32];
+        for (int i = 0; i < key.length; i++) key[i] = (byte) Integer.parseInt(hexKey.substring(i * 2, i * 2 + 2), 16);
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(key, "HmacSHA256"));
+        StringBuilder result = new StringBuilder();
+        for (byte value : mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)))
+            result.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+        return result.toString();
     }
 
     private static void assertWhiteNotification(Context context, Notification notification) {

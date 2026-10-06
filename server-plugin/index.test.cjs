@@ -4,6 +4,9 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'silly-pop-test-'));
+process.env.HOME = temporary;
+fs.mkdirSync(path.join(temporary, '.config', 'silly-pop'), {recursive:true, mode:0o700});
+fs.writeFileSync(path.join(temporary, '.config', 'silly-pop', 'bridge-key'), '42'.repeat(32), {mode:0o600});
 const command = path.join(temporary, 'am');
 fs.writeFileSync(command, `#!${process.execPath}
 const args = process.argv.slice(2);
@@ -55,7 +58,7 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.3.1');
+    assert.equal(status.body.version, '2.4.0');
     const headerMarker={protocol:1,requestId:'header-test',clientId:'header-client',type:'normal',characterName:'한글 이름'};
     const headerRequest={headers:{'x-silly-pop':encodeURIComponent(JSON.stringify(headerMarker))},body:{type:'normal'}};
     assert.equal(api.getMarker(headerRequest).characterName,'한글 이름');
@@ -83,6 +86,14 @@ async function run() {
     let calls = fs.readFileSync(process.env.SILLY_POP_TEST_CALLS, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(calls.filter(args => args.includes('com.foreverharibo.sillypop.NOTIFY')).length, 1);
     assert(calls.every(args => args.includes('--user') && args.includes('-n')));
+    for (const args of calls) {
+        const payload = args[args.indexOf('payload') + 1];
+        const signature = args[args.indexOf('signature') + 1];
+        assert.equal(signature, require('node:crypto').createHmac('sha256', Buffer.from('42'.repeat(32), 'hex'))
+            .update(payload).digest('hex'));
+        assert.equal(JSON.parse(payload).action, args[args.indexOf('-a') + 1]);
+        assert(!args.includes('42'.repeat(32)), 'Never send the pairing key through am');
+    }
 
     assert.equal(api.broadcastDispatched(0, 'Broadcast sent without waiting for result'), true);
     assert.equal(api.broadcastDispatched(1, 'Broadcast sent without waiting for result'), false);
@@ -117,6 +128,11 @@ async function run() {
     const missing = await api.checkCompanion(true);
     assert.equal(missing.reason, 'bridge_missing');
     assert.match(missing.detail, /pkg install termux-am/);
+    fs.unlinkSync(path.join(temporary, '.config', 'silly-pop', 'bridge-key'));
+    const beforeMissingKey = fs.readFileSync(process.env.SILLY_POP_TEST_CALLS, 'utf8');
+    assert.equal((await api.checkCompanion(true)).reason, 'pairing_required');
+    await assert.rejects(api.runNotification({}), /연결 명령/);
+    assert.equal(fs.readFileSync(process.env.SILLY_POP_TEST_CALLS, 'utf8'), beforeMissingKey);
     await plugin.exit();
     assert.equal(http.ServerResponse.prototype.end, originalEnd);
 }

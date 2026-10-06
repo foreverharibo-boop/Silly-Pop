@@ -9,7 +9,8 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.3.1';
+const VERSION = '2.4.0';
+const bridgeAuth = require('./bridge-auth.cjs');
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -88,6 +89,11 @@ function broadcastArgs(action) {
         '--include-stopped-packages', '-n', APP_RECEIVER, '-a', action];
 }
 
+function authenticatedArgs(action, fields, key) {
+    const signed = bridgeAuth.sign(action, fields, key);
+    return [...broadcastArgs(action), '--es', 'payload', signed.payload, '--es', 'signature', signed.signature];
+}
+
 function executeBroadcast(command, args) {
     return new Promise(resolve => {
         const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
@@ -107,10 +113,16 @@ async function checkCompanion(force = false) {
     if (pendingCompanionCheck) return pendingCompanionCheck;
     if (!force && Date.now() - lastCompanionCheck.checkedAt < 15000) return lastCompanionCheck;
     pendingCompanionCheck = (async () => {
+        let key;
+        try { key = bridgeAuth.readKey(); } catch (error) {
+            lastCompanionCheck = {checkedAt: Date.now(), installed: null, transportReady: false,
+                reason: 'pairing_required', detail: error.message};
+            return lastCompanionCheck;
+        }
         const command = getBridgeCommand();
         let status = { installed: false, command, reason: 'bridge_missing', detail: 'Termux용 am 명령이 없어요. Termux에서 pkg install termux-am 실행 후 다시 확인해 주세요.' };
         if (command) {
-            const result = await executeBroadcast(command, broadcastArgs(APP_PING_ACTION));
+            const result = await executeBroadcast(command, authenticatedArgs(APP_PING_ACTION, {}, key));
             const installed = broadcastCompleted(result.code, result.output, true);
             const dispatchOnly = broadcastDispatched(result.code, result.output);
             status = { installed: dispatchOnly ? null : installed, command, dispatchOnly,
@@ -152,16 +164,13 @@ function safeUrl(value) {
 async function runNotification({ title, content, sound, vibrate, url }) {
         const status = await checkCompanion();
         if (!status.transportReady) throw new Error(`${status.detail} ${status.diagnostic || ''}`.trim());
-        const args = [
-            ...broadcastArgs(APP_ACTION),
-            '--es', 'title', cleanText(title, 120) || 'Silly-Pop',
-            '--es', 'body', cleanText(content, 280) || '답변 생성이 완료됐어요.',
-            '--es', 'url', safeUrl(url),
-            '--ez', 'sound', sound ? 'true' : 'false',
-            '--ez', 'vibrate', vibrate ? 'true' : 'false',
-        ];
+        const args = authenticatedArgs(APP_ACTION, {
+            title: cleanText(title, 120) || 'Silly-Pop',
+            url: safeUrl(url), sound, vibrate,
+        });
 
         const result = await executeBroadcast(status.command, args);
+        if (/authentication-failed/i.test(result.output)) throw new Error('앱의 연결 명령을 Termux에 다시 붙여넣어 주세요.');
         if (/notification-permission-disabled/i.test(result.output)) {
             throw new Error('Silly-Pop 앱의 알림 권한 또는 알림 채널이 꺼져 있어요. 앱의 알림 설정을 확인해 주세요.');
         }

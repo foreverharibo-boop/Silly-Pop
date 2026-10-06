@@ -31,6 +31,17 @@
                     android:minWidth="0dp" android:minHeight="0dp" android:paddingStart="12dp" android:paddingEnd="12dp"
                     android:text="설정" android:textSize="12sp" android:textAllCaps="false" android:stateListAnimator="@null" />
             </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="18dp" android:gravity="center_vertical" android:orientation="horizontal">
+                <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="서버 연결" android:textSize="14sp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="5dp"
+                        android:text="처음 한 번만 Termux에 붙여넣기" android:textSize="11sp" android:tag="secondary" />
+                </LinearLayout>
+                <Button android:id="@+id/pairButton" android:layout_width="wrap_content" android:layout_height="40dp"
+                    android:minWidth="0dp" android:minHeight="0dp" android:paddingStart="10dp" android:paddingEnd="10dp"
+                    android:text="연결 명령 복사" android:textSize="11sp" android:textAllCaps="false" android:stateListAnimator="@null" />
+            </LinearLayout>
         </LinearLayout>
         <Button android:id="@+id/testButton" android:layout_width="match_parent" android:layout_height="46dp"
             android:layout_marginTop="14dp" android:minHeight="0dp" android:text="테스트 알림" android:textSize="14sp"

@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import org.json.JSONObject;
 
 public final class SillyPopReceiver extends BroadcastReceiver {
     public static final String ACTION_NOTIFY = "com.foreverharibo.sillypop.NOTIFY";
@@ -12,6 +13,13 @@ public final class SillyPopReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         if (intent == null) return;
+        if (!ACTION_NOTIFY.equals(intent.getAction()) && !ACTION_PING.equals(intent.getAction())) return;
+        JSONObject message = BridgeAuth.verify(context, intent);
+        if (message == null) {
+            setResultCode(ActivityResultCodes.CANCELED);
+            setResultData("authentication-failed");
+            return;
+        }
         if (ACTION_PING.equals(intent.getAction())) {
             setResultCode(ActivityResultCodes.OK);
             setResultData("silly-pop-ready:" + BuildConfig.VERSION_NAME + ";permission="
@@ -20,11 +28,11 @@ public final class SillyPopReceiver extends BroadcastReceiver {
         }
         if (!ACTION_NOTIFY.equals(intent.getAction())) return;
 
-        String title = clean(intent.getStringExtra("title"), 120);
+        String title = clean(message.optString("title", ""), 120);
         // Older server plugins still send a body; notifications now show only the title.
-        String url = safeUrl(intent.getStringExtra("url"));
-        boolean sound = intent.getBooleanExtra("sound", true);
-        boolean vibrate = intent.getBooleanExtra("vibrate", true);
+        String url = safeUrl(message.optString("url", ""));
+        boolean sound = message.optBoolean("sound", true);
+        boolean vibrate = message.optBoolean("vibrate", true);
 
         if (title.isEmpty()) title = "답변이 도착했어요";
         if (url.isEmpty()) url = NotificationHelper.DEFAULT_SILLY_URL;

@@ -1,0 +1,5 @@
+{
+  "key": "4242424242424242424242424242424242424242424242424242424242424242",
+  "payload": "{\"v\":1,\"action\":\"com.foreverharibo.sillypop.NOTIFY\",\"ts\":1700000000000,\"nonce\":\"0123456789abcdef0123456789abcdef\",\"title\":\"김홍진의 답변이 도착했어요\",\"url\":\"http://127.0.0.1:8000/chat?x=한글\",\"sound\":true,\"vibrate\":false}",
+  "signature": "5279234fa6fae70bbe868877cc34f72ab7d8b5c636e70e006408ba6898fe012b"
+}

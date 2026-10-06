@@ -4,6 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.Intent;
+import android.content.ClipboardManager;
+import android.content.ClipData;
+import android.os.PersistableBundle;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -46,6 +49,7 @@ public final class MainActivity extends Activity {
 
         permissionButton.setOnClickListener(view -> requestNotificationPermission());
         testButton.setOnClickListener(view -> sendTestNotification());
+        findViewById(R.id.pairButton).setOnClickListener(view -> copyPairingCommand());
         logoFrame.setBackgroundResource(R.drawable.bg_logo_white);
         logoImage.setImageResource(R.drawable.ic_st_modular_black);
         applyWhiteTheme();
@@ -61,6 +65,23 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updatePermissionUi();
+    }
+
+    private void copyPairingCommand() {
+        try {
+            String key = BridgeAuth.getOrCreateKey(this);
+            String command = " mkdir -p \"$HOME/.config/silly-pop\" && chmod 700 \"$HOME/.config/silly-pop\""
+                + " && (umask 077; printf '%s\\n' '" + key + "' > \"$HOME/.config/silly-pop/bridge-key\")"
+                + " && chmod 600 \"$HOME/.config/silly-pop/bridge-key\" && echo 'Silly-Pop 연결 키 저장 완료'";
+            ClipData clip = ClipData.newPlainText("Silly-Pop 연결 명령", command);
+            PersistableBundle extras = new PersistableBundle();
+            extras.putBoolean("android.content.extra.IS_SENSITIVE", true);
+            clip.getDescription().setExtras(extras);
+            getSystemService(ClipboardManager.class).setPrimaryClip(clip);
+            Toast.makeText(this, "Termux의 새 세션에 한 번 붙여넣고 Enter를 눌러 주세요. 연결 명령은 다른 사람에게 공유하지 마세요.", Toast.LENGTH_LONG).show();
+        } catch (RuntimeException error) {
+            Toast.makeText(this, "연결 명령을 복사하지 못했어요. 다시 시도해 주세요.", Toast.LENGTH_LONG).show();
+        }
     }
 
     private boolean hasRuntimeNotificationPermission() {
@@ -138,6 +159,7 @@ public final class MainActivity extends Activity {
         colorText(root, primary, secondary);
         findViewById(R.id.settingsCard).setBackground(rounded(surface, border, 16));
         permissionButton.setBackground(rounded(surface, border, 10));
+        findViewById(R.id.pairButton).setBackground(rounded(surface, border, 10));
         Button test = findViewById(R.id.testButton);
         test.setBackground(rounded(primary, primary, 12));
         test.setTextColor(background);

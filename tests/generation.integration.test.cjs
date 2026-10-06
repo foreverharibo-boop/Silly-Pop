@@ -8,6 +8,9 @@ const {setTimeout: delay} = require('node:timers/promises');
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'silly-pop-generation-'));
 const callFile = path.join(temporary, 'calls.jsonl');
+process.env.HOME = temporary;
+fs.mkdirSync(path.join(temporary, '.config', 'silly-pop'), {recursive:true, mode:0o700});
+fs.writeFileSync(path.join(temporary, '.config', 'silly-pop', 'bridge-key'), '42'.repeat(32), {mode:0o600});
 const command = path.join(temporary, 'am');
 fs.writeFileSync(command, `#!${process.execPath}
 require('node:fs').appendFileSync(${JSON.stringify(callFile)}, JSON.stringify(process.argv.slice(2))+'\\n');
