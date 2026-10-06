@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.0';
+const VERSION = '2.4.1';
 const bridgeAuth = require('./bridge-auth.cjs');
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -282,7 +282,7 @@ async function handleCompletedResponse(response, marker) {
         return;
     }
     const characterName = marker.characterName;
-    const title = characterName ? `${characterName}의 답변이 도착했어요` : '답변이 도착했어요';
+    const title = characterName ? `${characterName}의 답장이 도착했어요` : '답장이 도착했어요';
     try {
         const delivery = await runNotification({
             title,

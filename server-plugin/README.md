@@ -8,4 +8,4 @@ The plugin watches only generation responses explicitly marked by the Silly-Pop 
 
 See the root [README](../README.md) for installation instructions.
 
-Server 2.4.0 requires app 1.0.0 and one-time pairing using the command copied from the app. Requests carry an HMAC-SHA256 signature, timestamp and nonce; the pairing key is never included in broadcasts. See the root README for setup.
+Server 2.4.1 requires app 1.0.0 and one-time pairing using the command copied from the app. Requests carry an HMAC-SHA256 signature, timestamp and nonce; the pairing key is never included in broadcasts. See the root README for setup.
