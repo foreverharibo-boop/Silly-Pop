@@ -1,5 +1,5 @@
 /*
- * Silly-Pop Termux server companion
+ * Silly-Pop Android companion bridge
  * Copyright (C) 2026 담은
  * Licensed under AGPL-3.0-or-later. See ../LICENSE.
  */
@@ -7,14 +7,16 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
-const NOTIFICATION_TIMEOUT_MS = 8000;
-const NOTIFICATION_ID = 'silly-pop-response';
+const NOTIFICATION_TIMEOUT_MS = 5000;
+const APP_PACKAGE = 'com.foreverharibo.sillypop';
+const APP_RECEIVER = `${APP_PACKAGE}/.SillyPopReceiver`;
+const APP_ACTION = `${APP_PACKAGE}.NOTIFY`;
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
     '/api/backends/text-completions/generate',
@@ -28,18 +30,15 @@ const handledRequests = new Map();
 const originalEnd = http.ServerResponse.prototype.end;
 let patched = false;
 
-function getNotificationCommand() {
-    if (process.env.SILLY_POP_NOTIFICATION_COMMAND) {
-        return process.env.SILLY_POP_NOTIFICATION_COMMAND;
+function getBridgeCommand() {
+    if (process.env.SILLY_POP_BRIDGE_COMMAND) {
+        return process.env.SILLY_POP_BRIDGE_COMMAND;
     }
-    if (process.env.PREFIX) {
-        return path.join(process.env.PREFIX, 'bin', 'termux-notification');
-    }
-    return 'termux-notification';
+    return '/system/bin/am';
 }
 
-function notificationCommandExists() {
-    const command = getNotificationCommand();
+function bridgeCommandExists() {
+    const command = getBridgeCommand();
     if (path.isAbsolute(command)) {
         try {
             fs.accessSync(command, fs.constants.X_OK);
@@ -49,6 +48,25 @@ function notificationCommandExists() {
         }
     }
     return false;
+}
+
+function companionAppInstalled() {
+    if (process.env.SILLY_POP_COMPANION_INSTALLED) {
+        return process.env.SILLY_POP_COMPANION_INSTALLED === '1';
+    }
+    if (process.env.SILLY_POP_BRIDGE_COMMAND) return bridgeCommandExists();
+    if (!bridgeCommandExists()) return false;
+
+    try {
+        const result = spawnSync('/system/bin/cmd', ['package', 'path', APP_PACKAGE], {
+            encoding: 'utf8',
+            timeout: 1500,
+            windowsHide: true,
+        });
+        return result.status === 0 && String(result.stdout || '').includes(`package:`);
+    } catch {
+        return false;
+    }
 }
 
 function cleanText(value, maxLength = 100) {
@@ -70,47 +88,47 @@ function safeUrl(value) {
     }
 }
 
-function shellQuote(value) {
-    return `'${String(value).replace(/'/g, `'"'"'`)}'`;
-}
-
-function makeOpenAction(url) {
-    const target = safeUrl(url);
-    if (!target) return '';
-    return `/system/bin/am start --activity-single-top -a android.intent.action.VIEW -d ${shellQuote(target)} >/dev/null 2>&1`;
-}
-
 function runNotification({ title, content, sound, vibrate, url }) {
     return new Promise((resolve, reject) => {
-        if (!notificationCommandExists()) {
-            reject(new Error('termux-notification 명령을 찾지 못했습니다. pkg install termux-api를 실행해 주세요.'));
+        if (!bridgeCommandExists()) {
+            reject(new Error('이 서버에서는 안드로이드 앱 호출 명령을 찾지 못했습니다.'));
+            return;
+        }
+        if (!companionAppInstalled()) {
+            reject(new Error('Silly-Pop 알림 앱이 설치되지 않았습니다.'));
             return;
         }
 
         const args = [
-            '--id', NOTIFICATION_ID,
-            '--title', cleanText(title, 120) || 'Silly-Pop',
-            '--content', cleanText(content, 240) || '답변 생성이 완료됐어요.',
-            '--priority', 'max',
-            '--icon', 'chat',
+            'broadcast',
+            '--user', '0',
+            '--receiver-foreground',
+            '-n', APP_RECEIVER,
+            '-a', APP_ACTION,
+            '--es', 'title', cleanText(title, 120) || 'Silly-Pop',
+            '--es', 'body', cleanText(content, 280) || '답변 생성이 완료됐어요.',
+            '--es', 'url', safeUrl(url),
+            '--ez', 'sound', sound ? 'true' : 'false',
+            '--ez', 'vibrate', vibrate ? 'true' : 'false',
         ];
-        if (sound) args.push('--sound');
-        if (vibrate) args.push('--vibrate', '140,70,140');
-        const action = makeOpenAction(url);
-        if (action) args.push('--action', action);
 
-        const child = spawn(getNotificationCommand(), args, {
-            stdio: ['ignore', 'ignore', 'pipe'],
+        const child = spawn(getBridgeCommand(), args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
             env: process.env,
         });
+        let stdout = '';
         let stderr = '';
+        child.stdout.on('data', chunk => {
+            stdout += chunk.toString();
+            if (stdout.length > 2000) stdout = stdout.slice(-2000);
+        });
         child.stderr.on('data', chunk => {
             stderr += chunk.toString();
             if (stderr.length > 2000) stderr = stderr.slice(-2000);
         });
         const timer = setTimeout(() => {
             child.kill('SIGKILL');
-            reject(new Error('Termux:API가 응답하지 않았습니다. Termux:API 앱 설치와 권한을 확인해 주세요.'));
+            reject(new Error('Silly-Pop 앱 호출이 시간 안에 완료되지 않았습니다.'));
         }, NOTIFICATION_TIMEOUT_MS);
         child.once('error', error => {
             clearTimeout(timer);
@@ -118,8 +136,10 @@ function runNotification({ title, content, sound, vibrate, url }) {
         });
         child.once('exit', code => {
             clearTimeout(timer);
-            if (code === 0) resolve();
-            else reject(new Error(cleanText(stderr, 500) || `termux-notification 종료 코드 ${code}`));
+            const output = cleanText(`${stdout} ${stderr}`, 700);
+            const failed = /(?:error|exception|unable|not found)/i.test(output);
+            if (code === 0 && !failed) resolve();
+            else reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
         });
     });
 }
@@ -183,7 +203,7 @@ function handleCompletedResponse(response, marker) {
         sound: state ? state.sound : marker.sound,
         vibrate: state ? state.vibrate : marker.vibrate,
         url: state?.url || marker.url,
-    }).catch(error => console.error('[Silly-Pop] Termux 알림 전송 실패:', error.message));
+    }).catch(error => console.error('[Silly-Pop] 앱 알림 전송 실패:', error.message));
 }
 
 function patchResponseEnd() {
@@ -215,8 +235,8 @@ function restoreResponseEnd() {
 
 const info = {
     id: 'silly-pop',
-    name: 'Silly-Pop Termux Companion',
-    description: 'Sends Android notifications from the SillyTavern server when a marked generation finishes.',
+    name: 'Silly-Pop Android Companion',
+    description: 'Notifies the Silly-Pop Android app when a marked SillyTavern generation finishes.',
 };
 
 async function init(router) {
@@ -227,7 +247,9 @@ async function init(router) {
             ok: true,
             version: VERSION,
             protocol: PROTOCOL_VERSION,
-            notificationCommand: notificationCommandExists(),
+            appInstalled: companionAppInstalled(),
+            bridgeCommand: bridgeCommandExists(),
+            appReady: bridgeCommandExists() && companionAppInstalled(),
         });
     });
 
@@ -264,7 +286,8 @@ async function init(router) {
         }
     });
 
-    console.log(`[Silly-Pop] Termux server companion v${VERSION} loaded (${notificationCommandExists() ? 'termux-api ready' : 'termux-api command missing'}).`);
+    const status = bridgeCommandExists() && companionAppInstalled() ? 'Android app ready' : 'waiting for Android app';
+    console.log(`[Silly-Pop] Android companion bridge v${VERSION} loaded (${status}).`);
 }
 
 async function exit() {

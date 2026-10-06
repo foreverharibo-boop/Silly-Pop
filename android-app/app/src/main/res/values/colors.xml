@@ -1,0 +1,13 @@
+<resources>
+    <color name="lavender_50">#FAF7FF</color>
+    <color name="lavender_100">#F1EAFF</color>
+    <color name="lavender_300">#C8B4FF</color>
+    <color name="lavender_500">#8B6DE9</color>
+    <color name="lavender_700">#6547C7</color>
+    <color name="pink_300">#FF9BB8</color>
+    <color name="pink_500">#F16D9A</color>
+    <color name="ink">#2D2740</color>
+    <color name="ink_soft">#746C85</color>
+    <color name="white">#FFFFFF</color>
+    <color name="green">#4BBF88</color>
+</resources>

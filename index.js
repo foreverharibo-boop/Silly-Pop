@@ -353,11 +353,13 @@ async function checkCompanion() {
         const data = await response.json();
         companionState = {
             installed: true,
-            ready: Boolean(data.notificationCommand),
+            ready: Boolean(data.appReady),
             version: String(data.version || ''),
-            detail: data.notificationCommand
-                ? `Termux 서버 알림 v${data.version || '?'}가 준비됐어요.`
-                : '서버 플러그인은 있지만 termux-api 패키지가 필요해요.',
+            detail: data.appReady
+                ? `Silly-Pop 알림 앱과 연결됐어요. (브리지 v${data.version || '?'})`
+                : data.appInstalled
+                    ? '알림 앱은 있지만 안드로이드 연결 명령을 사용할 수 없어요.'
+                    : '서버 플러그인은 연결됐지만 Silly-Pop 알림 앱 설치가 필요해요.',
         };
         void sendCompanionState();
     } catch {
@@ -365,7 +367,7 @@ async function checkCompanion() {
             installed: false,
             ready: false,
             version: '',
-            detail: '브라우저 알림으로 작동 중이에요. Termux 동반 플러그인을 설치하면 백그라운드에서도 확실히 알려줘요.',
+            detail: '브라우저 알림으로 작동 중이에요. 서버 플러그인과 알림 앱을 연결하면 백그라운드에서도 확실히 알려줘요.',
         };
     }
     updateCompanionStatus();
@@ -431,7 +433,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.2.0</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.0</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -440,7 +442,7 @@ function renderSettings() {
                         <button id="st_rn_permission" class="menu_button" type="button">알림 권한 허용</button>
                     </div>
                     <div class="st-rn-permission-card st-rn-server-card">
-                        <div><div class="st-rn-server-status" data-state="default">확인 중</div><div class="st-rn-server-detail">Termux 서버 알림 연결을 확인하고 있어요.</div></div>
+                        <div><div class="st-rn-server-status" data-state="default">확인 중</div><div class="st-rn-server-detail">Silly-Pop 알림 앱 연결을 확인하고 있어요.</div></div>
                         <button id="st_rn_server_refresh" class="menu_button" type="button">연결 확인</button>
                     </div>
                     <label class="st-rn-row" for="st_rn_enabled"><span><b>답변 완료 알림</b><small>AI 답변 생성이 끝나면 알림을 보냅니다.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
@@ -449,7 +451,7 @@ function renderSettings() {
                     <label class="st-rn-row" for="st_rn_sound"><span><b>알림 소리</b></span><input id="st_rn_sound" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_vibrate"><span><b>진동</b></span><input id="st_rn_vibrate" type="checkbox" /></label>
                     <button id="st_rn_test" class="menu_button st-rn-test" type="button"><span class="fa-solid fa-paper-plane"></span> 테스트 알림 보내기</button>
-                    <div class="st-rn-note">Termux 서버 알림이 연결되면 브라우저가 멈춰도 답변 완료 알림이 옵니다.</div>
+                    <div class="st-rn-note">Silly-Pop 앱이 연결되면 브라우저가 멈춰도 답변 완료 알림이 옵니다.</div>
                 </div>
             </div>
         </div>
@@ -470,9 +472,9 @@ function renderSettings() {
         if (companionState.ready) {
             try {
                 await sendCompanionTest();
-                toast('success', 'Termux 서버 테스트 알림을 보냈어요.');
+                toast('success', 'Silly-Pop 앱으로 테스트 알림을 보냈어요.');
             } catch (error) {
-                toast('error', `Termux 서버 알림에 실패했어요: ${error.message}`);
+                toast('error', `Silly-Pop 앱 알림에 실패했어요: ${error.message}`);
             }
             return;
         }

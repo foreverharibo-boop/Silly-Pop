@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
-process.env.SILLY_POP_NOTIFICATION_COMMAND = '/bin/true';
+process.env.SILLY_POP_BRIDGE_COMMAND = '/bin/true';
+process.env.SILLY_POP_COMPANION_INSTALLED = '1';
 
 const plugin = require('./index.cjs');
 
@@ -35,7 +36,9 @@ async function run() {
     routes.get.get('/status')({}, statusResponse);
     assert.equal(statusResponse.statusCode, 200);
     assert.equal(statusResponse.body.ok, true);
-    assert.equal(statusResponse.body.notificationCommand, true);
+    assert.equal(statusResponse.body.appInstalled, true);
+    assert.equal(statusResponse.body.bridgeCommand, true);
+    assert.equal(statusResponse.body.appReady, true);
 
     const stateResponse = makeResponse();
     routes.get.get('/state')({

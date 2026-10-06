@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Silly-Pop</string>
+    <string name="app_tagline">실리의 답변을 톡, 귀엽게 알려드려요</string>
+    <string name="ready_title">알림 받을 준비가 됐어요</string>
+    <string name="ready_description">Silly-Pop 서버 플러그인이 답변 완료를 감지하면 이 앱이 바로 알려드려요.</string>
+    <string name="permission_title">알림 권한</string>
+    <string name="permission_allowed">허용됨</string>
+    <string name="permission_needed">권한이 필요해요</string>
+    <string name="permission_button">알림 권한 허용</string>
+    <string name="test_button">테스트 알림 보내기</string>
+    <string name="open_silly_button">실리 열기</string>
+    <string name="privacy_title">안심하고 사용하세요</string>
+    <string name="privacy_description">외부 서버 전송 없음 · 파일/연락처/문자 권한 없음 · 백그라운드 상시 실행 없음</string>
+    <string name="footer">Silly-Pop v0.1.0 · by 담은</string>
+</resources>
