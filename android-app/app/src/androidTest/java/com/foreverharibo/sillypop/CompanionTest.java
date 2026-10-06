@@ -45,7 +45,13 @@ public final class CompanionTest {
         ActivityManager manager = context.getSystemService(ActivityManager.class);
         boolean stableRoot = false;
         for (ActivityManager.AppTask task : manager.getAppTasks()) {
-            ActivityManager.RecentTaskInfo info = task.getTaskInfo();
+            ActivityManager.RecentTaskInfo info;
+            try {
+                info = task.getTaskInfo();
+            } catch (IllegalArgumentException removedTask) {
+                // The disposable launcher can finish between enumeration and lookup.
+                continue;
+            }
             if (info.taskId == screen.getTaskId()) {
                 stableRoot = new ComponentName(context, MainActivity.class).equals(info.baseActivity);
             }

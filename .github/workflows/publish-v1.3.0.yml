@@ -50,6 +50,17 @@ jobs:
           disable-animations: true
           script: cd android-app && gradle --no-daemon :app:connectedDebugAndroidTest
 
+      - name: Preserve device test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-device-test-reports
+          path: |
+            android-app/app/build/reports/androidTests/
+            android-app/app/build/outputs/androidTest-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Restore release signing key
         shell: bash
         env:
