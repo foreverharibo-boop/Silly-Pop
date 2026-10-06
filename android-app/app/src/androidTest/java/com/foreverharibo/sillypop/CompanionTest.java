@@ -12,6 +12,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
+import android.net.Uri;
+import android.os.Bundle;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
@@ -24,6 +29,39 @@ import org.junit.runner.RunWith;
 /** Exercises the real launcher aliases and an external notification broadcast. */
 @RunWith(AndroidJUnit4.class)
 public final class CompanionTest {
+    @Test
+    public void notificationOpensOnlyAnUnambiguousMatchingWebApp() {
+        Intent base = new Intent(Intent.ACTION_VIEW, Uri.parse("https://silly.example/chat"));
+        ResolveInfo browser = webApp("browser", null);
+        assertNull(NotificationHelper.selectWebAppIntent(base, java.util.List.of(browser)));
+        ResolveInfo app = webApp("org.chromium.webapk.example", "https://silly.example/");
+        Intent target = NotificationHelper.selectWebAppIntent(base, java.util.List.of(browser, app));
+        assertNotNull(target);
+        assertEquals("org.chromium.webapk.example", target.getComponent().getPackageName());
+        assertEquals(base.getData(), target.getData());
+        assertNull(NotificationHelper.selectWebAppIntent(base,
+            java.util.List.of(webApp("other", "https://other.example/"))));
+        assertNull(NotificationHelper.selectWebAppIntent(base,
+            java.util.List.of(app, webApp("duplicate", "https://silly.example/"))));
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assertNull(NotificationHelper.createOpenIntent(context, "javascript:alert(1)"));
+    }
+
+    private static ResolveInfo webApp(String packageName, String startUrl) {
+        ResolveInfo result = new ResolveInfo();
+        result.activityInfo = new ActivityInfo();
+        result.activityInfo.name = "MainActivity";
+        result.activityInfo.packageName = packageName;
+        result.activityInfo.enabled = true;
+        result.activityInfo.exported = true;
+        result.activityInfo.applicationInfo = new ApplicationInfo();
+        result.activityInfo.applicationInfo.enabled = true;
+        result.activityInfo.applicationInfo.metaData = new Bundle();
+        if (startUrl != null) result.activityInfo.applicationInfo.metaData.putString(
+            "org.chromium.webapk.shell_apk.startUrl", startUrl);
+        return result;
+    }
+
     @Test
     public void switchingIconsKeepsScreenAliveAndReceiverPostsNotification() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
@@ -90,8 +128,12 @@ public final class CompanionTest {
         boolean received = false;
         for (int attempt = 0; attempt < 30 && !received; attempt++) {
             for (StatusBarNotification posted : notifications.getActiveNotifications()) {
-                received |= "CompanionRegression".contentEquals(
-                    posted.getNotification().extras.getCharSequence(Notification.EXTRA_TITLE, ""));
+                if ("CompanionRegression".contentEquals(
+                    posted.getNotification().extras.getCharSequence(Notification.EXTRA_TITLE, ""))) {
+                    received = true;
+                    assertNull("No installed localhost WebAPK: notification must not open a browser",
+                        posted.getNotification().contentIntent);
+                }
             }
             if (!received) SystemClock.sleep(100);
         }

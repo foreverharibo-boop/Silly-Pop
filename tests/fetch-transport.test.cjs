@@ -13,7 +13,7 @@ const sandbox={console,URL,URLSearchParams,Request,Headers,AbortSignal,Date,Math
 sandbox.globalThis=sandbox;
 const source=fs.readFileSync(path.join(__dirname,'../index.js'),'utf8');
 vm.runInNewContext(source.replaceAll('import.meta.url',JSON.stringify('https://local.test/extensions/silly-pop/index.js'))+
-    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,diagnosticEvents,traceGeneration};',sandbox);
+    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,markGenerationPayload,quietReplySource,diagnosticEvents,traceGeneration};',sandbox);
 const endpoint='https://local.test/api/backends/chat-completions/generate';
 const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers).get('X-Silly-Pop')));
 (async()=>{
@@ -45,6 +45,21 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     call=calls.at(-1);assert.equal(call.init.body,overrideBody);
     assert.equal(new Headers(call.init.headers).get('X-CSRF-Token'),'override');
     assert.equal(markerOf(call).type,'swipe');
+
+    const actualFrames=['EventEmitter.markGenerationPayload','EventEmitter.emit','sendOpenAIRequest',
+        'sendGenerationRequest','finishGenerating','Object.generateQuietPrompt','reviewStep','traceDiagnostic','traceGeneration'];
+    assert.equal(sandbox.testApi.quietReplySource(actualFrames.map(fn=>`    at ${fn} (https://local.test/script.js:1:1)`).join('\n')),'hundredlog');
+    assert.equal(sandbox.testApi.quietReplySource('    at generateRevision (https://local.test/index.js:1:1)'),'instead');
+    assert.equal(sandbox.testApi.quietReplySource('    at traceDiagnostic (https://local.test/index.js:1:1)'),'');
+    function reviewStep(fn) { return fn(); }
+    function traceGeneration(fn) { return reviewStep(fn); }
+    const reviewedPayload={type:'quiet',messages:[{role:'user',content:'unchanged reply prompt'}]};
+    traceGeneration(()=>sandbox.testApi.markGenerationPayload(reviewedPayload));
+    const reviewedBody=JSON.stringify(reviewedPayload);
+    await sandbox.fetch(endpoint,{method:'POST',headers,body:reviewedBody});
+    assert.equal(markerOf(calls.at(-1)).replySource,'hundredlog');
+    assert.equal(markerOf(calls.at(-1)).type,'quiet','actual generation type must remain quiet');
+    assert.equal(calls.at(-1).init.body,reviewedBody,'notification provenance must not alter prompts');
 
     const cases=[
         ['https://external.test/api/backends/chat-completions/generate',options],

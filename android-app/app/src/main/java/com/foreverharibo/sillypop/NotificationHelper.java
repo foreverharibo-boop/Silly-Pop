@@ -7,11 +7,12 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
-import android.provider.Browser;
+import java.util.List;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -24,7 +25,7 @@ public final class NotificationHelper {
     private static final String CHANNEL_SOUND = "silly_pop_sound";
     private static final String CHANNEL_VIBRATE = "silly_pop_vibrate";
     private static final String CHANNEL_SILENT = "silly_pop_silent";
-    private static final String SAMSUNG_INTERNET = "com.sec.android.app.sbrowser";
+    private static final String WEBAPK_START_URL = "org.chromium.webapk.shell_apk.startUrl";
     private static final AtomicInteger NEXT_ID = new AtomicInteger(1200);
     private static final long[] VIBRATION = new long[]{0, 140, 70, 140};
 
@@ -77,24 +78,21 @@ public final class NotificationHelper {
         String channelId = channelId(sound, vibrate);
         NotificationChannel channel = manager.getNotificationChannel(channelId);
         if (channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
-        PendingIntent openIntent = PendingIntent.getActivity(
-            context,
-            NEXT_ID.incrementAndGet(),
-            createOpenIntent(context, url),
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-
-        Notification notification = new Notification.Builder(context, channelId)
+        Intent target = createOpenIntent(context, url);
+        Notification.Builder builder = new Notification.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
-            .setContentIntent(openIntent)
             .setStyle(new Notification.BigTextStyle().bigText(body))
-            .setShowWhen(true)
-            .build();
+            .setShowWhen(true);
+        if (target != null) {
+            builder.setContentIntent(PendingIntent.getActivity(context, NEXT_ID.incrementAndGet(), target,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+        }
+        Notification notification = builder.build();
 
         try {
             manager.notify(NEXT_ID.incrementAndGet(), notification);
@@ -110,24 +108,45 @@ public final class NotificationHelper {
             uri = Uri.parse(url);
             String scheme = uri.getScheme();
             if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-                uri = Uri.parse(DEFAULT_SILLY_URL);
+                return null;
             }
         } catch (Exception ignored) {
-            uri = Uri.parse(DEFAULT_SILLY_URL);
+            return null;
         }
-
         Intent intent = new Intent(Intent.ACTION_VIEW, uri)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            .putExtra(Browser.EXTRA_APPLICATION_ID, SAMSUNG_INTERNET);
-
-        PackageManager packageManager = context.getPackageManager();
+            .addCategory(Intent.CATEGORY_BROWSABLE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
         try {
-            packageManager.getPackageInfo(SAMSUNG_INTERNET, 0);
-            intent.setPackage(SAMSUNG_INTERNET);
-        } catch (PackageManager.NameNotFoundException ignored) {
-            // Use the user's default browser when Samsung Internet is not installed.
+            // Android matches the installed WebAPK's URL scope. Generic browsers
+            // have no WebAPK startUrl metadata and must never be used as fallback.
+            return selectWebAppIntent(intent, context.getPackageManager().queryIntentActivities(intent,
+                PackageManager.MATCH_DEFAULT_ONLY | PackageManager.GET_META_DATA));
+        } catch (RuntimeException ignored) {
+            return null;
         }
-        return intent;
+    }
+
+    static Intent selectWebAppIntent(Intent base, List<ResolveInfo> matches) {
+        Intent selected = null;
+        for (ResolveInfo match : matches) {
+            if (match.activityInfo == null || !match.activityInfo.exported || !match.activityInfo.enabled
+                || match.activityInfo.applicationInfo == null || !match.activityInfo.applicationInfo.enabled
+                || match.activityInfo.applicationInfo.metaData == null) continue;
+            String start = match.activityInfo.applicationInfo.metaData.getString(WEBAPK_START_URL);
+            if (start == null) continue;
+            Uri startUri = Uri.parse(start);
+            Uri target = base.getData();
+            if (target == null || target.getHost() == null || !target.getHost().equalsIgnoreCase(startUri.getHost())
+                || !target.getScheme().equalsIgnoreCase(startUri.getScheme())
+                || effectivePort(target) != effectivePort(startUri)) continue;
+            if (selected != null) return null; // Ambiguous installed apps: do not open the wrong one.
+            selected = new Intent(base).setClassName(match.activityInfo.packageName, match.activityInfo.name);
+        }
+        return selected;
+    }
+
+    private static int effectivePort(Uri uri) {
+        return uri.getPort() >= 0 ? uri.getPort() : "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
     }
 
     private static String channelId(boolean sound, boolean vibrate) {

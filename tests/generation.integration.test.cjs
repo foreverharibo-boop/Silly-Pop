@@ -183,160 +183,41 @@ async function generate(client,payload) {
     await until(()=>notificationCalls().length===3,'eventless HTTP main request was not dispatched');
     assert.equal((await status('another-client')).lastGeneration,null,'diagnostics are scoped to each client');
 
-    // Reproduce the real 100LOG path: normal intercepted, quiet draft, review,
-    // quiet rewrite, then a final published answer. No alert for either AI draft.
-    const reviewed=browser('reviewed');
+    // User-requested quiet replies must notify from the server, even when the
+    // browser never runs another completion, render, focus, or save callback.
+    const reviewed=browser('server-quiet');
     await reviewed.sandbox.testApi.checkCompanion();
-    reviewed.context.chat=[{is_user:true,mes:'private prompt'}];
-    reviewed.events.get('started')('normal',{},false);
-    reviewed.events.get('started')('quiet',{},false);
-    reviewed.windowEvents.get('blur')();
-    const draft=await generate(reviewed,{type:'quiet'});
-    draft.response.end('{}'); await (await draft.result).text();
-    reviewed.events.get('ended')();
-    reviewed.events.get('started')('quiet',{},false);
-    const rewrite=await generate(reviewed,{type:'quiet'});
-    rewrite.response.end('{}'); await (await rewrite.result).text();
-    reviewed.events.get('ended')();
-    reviewed.events.get('started')('normal',{},true); // dry run must not disarm final publication.
-    await Promise.all([...requests]);
-    assert.equal(notificationCalls().length,3,'draft/review/rewrite must stay silent');
-    const answer={is_user:false,mes:'private final reply',swipes:['private final reply'],swipe_id:0,
-        extra:{hundredlog:true,gen_id:1234}};
-    reviewed.context.chat.push(answer);
-    reviewed.events.get('rendered')(1);
-    reviewed.events.get('rendered')(1);
-    reviewed.events.get('chatChanged')();
-    await until(async()=>(await status('reviewed')).lastGeneration?.reason==='dispatched','100LOG final reply was not dispatched');
-    assert.equal(notificationCalls().length,4);
-    assert.equal(completed.length,1,'duplicate render and reload only report once');
-    assert(!JSON.stringify(completed).includes('private'),'no reply, prompt, or feedback sent to bridge');
-    const replay=await fetch(`${baseUrl}/api/plugins/silly-pop/completed`,{method:'POST',body:JSON.stringify(completed[0])});
-    assert.equal(replay.status,200); await replay.json();
-    assert.equal(notificationCalls().length,4,'server deduplicates repeated completion');
-
-    // Existing replies and old swipe navigation during auxiliary quiet calls stay silent.
-    reviewed.events.get('started')('quiet',{},false);
-    reviewed.events.get('rendered')(1);
-    reviewed.events.get('chatChanged')();
-    assert.equal(completed.length,2); // includes explicit HTTP replay above.
-    // 100LOG adds a final swipe with new generation identity.
-    answer.swipes.push('new private swipe');
-    answer.swipe_id=1; answer.mes='new private swipe';
-    answer.swipe_info=[{}, {gen_id:1235,extra:{hundredlog:true}}];
-    answer.extra.gen_id=1235;
-    reviewed.context.extensionSettings.response_notifier.backgroundOnly=false;
-    reviewed.events.get('rendered')(1);
-    await until(()=>notificationCalls().length===5,'100LOG final swipe did not notify');
-
-    // inSTead creates an unfinished placeholder before quiet generation, then
-    // saves a finished revision and reloads the same chat (new message objects).
-    answer.swipes.push(''); answer.swipe_id=2;
-    answer.swipe_info.push({gen_started:'start',gen_finished:null,extra:{api:'inSTead',instead_revised:true}});
-    reviewed.events.get('started')('quiet',{},false);
-    reviewed.events.get('rendered')(1); // unfinished must not notify.
-    answer.swipe_id=0;
-    reviewed.events.get('rendered')(1); // older swipe with inherited root metadata.
-    answer.swipe_id=2;
-    await Promise.all([...requests]);
-    assert.equal(notificationCalls().length,5);
-    answer.mes='private revision'; answer.swipes[2]=answer.mes;
-    answer.swipe_info[2].gen_finished='finish';
-    reviewed.events.get('ended')();
-    reviewed.context.chat=JSON.parse(JSON.stringify(reviewed.context.chat));
-    reviewed.events.get('chatChanged')();
-    await until(()=>notificationCalls().length===6,'inSTead saved revision did not notify');
-    assert.equal(completed.at(-1).source,'instead');
-    reviewed.events.get('chatChanged')();
-    await Promise.all([...requests]);
-    assert.equal(notificationCalls().length,6);
-
-    // Cancellation, unrelated chats, and normal generation do not retain the
-    // quiet fallback. A new normal answer continues to use server HTTP completion.
-    for (const reset of ['stopped','chatChanged','normal']) {
-        reviewed.events.get('started')('quiet',{},false);
-        if (reset==='normal') reviewed.events.get('started')('normal',{},false);
-        else {
-            if (reset==='chatChanged') reviewed.context.chatId='chat-b';
-            reviewed.events.get(reset)();
-        }
-        reviewed.context.chat.push({mes:'not a completion',extra:{hundredlog:true,gen_id:Math.random()}});
-        reviewed.events.get('rendered')(reviewed.context.chat.length-1);
-    }
-    await Promise.all([...requests]);
-    assert.equal(notificationCalls().length,6);
-
-    // Final publication still respects foreground and disabled preferences.
-    for (const enabled of [true,false]) {
-        reviewed.context.extensionSettings.response_notifier.enabled=enabled;
-        reviewed.context.extensionSettings.response_notifier.backgroundOnly=true;
-        reviewed.events.get('started')('quiet',{},false);
-        reviewed.context.chat.push({mes:'published',extra:{hundredlog:true,gen_id:Math.random()}});
-        reviewed.events.get('rendered')(reviewed.context.chat.length-1);
-        const reason=enabled?'foreground':'disabled';
-        await until(async()=>(await status('reviewed')).lastGeneration?.reason===reason,`published ${reason} preference ignored`);
-    }
-    assert.equal(notificationCalls().length,6);
-    const invalid=await fetch(`${baseUrl}/api/plugins/silly-pop/completed`,{method:'POST',body:JSON.stringify({source:'unknown',silly_pop:marker})});
-    assert.equal(invalid.status,400); await invalid.json();
-
-    // Regression: a final 100LOG commit must not depend on quiet STARTED.
-    // The old implementation silently dropped both of these final renders.
-    const eventless=browser('published-without-start');
-    eventless.context.extensionSettings.response_notifier.backgroundOnly=false;
-    await eventless.sandbox.testApi.checkCompanion();
-    let completedAt=Date.now();
-    for (const scenario of ['no-start','reset-start']) {
-        if (scenario==='reset-start') {
-            eventless.events.get('started')('quiet',{},false);
-            eventless.events.get('started')('normal',{},false);
-        }
-        eventless.context.chat.push({is_user:false,mes:'new final reply',swipes:['new final reply'],swipe_id:0,
-            extra:{hundredlog:true,gen_id:completedAt++}});
-        const index=eventless.context.chat.length-1;
-        const before=notificationCalls().length;
-        eventless.events.get('rendered')(index);
-        await until(()=>notificationCalls().length===before+1,`${scenario}: published reply was lost`);
-        eventless.events.get('rendered')(index);
-        eventless.events.get('chatChanged')();
+    function reviewStep(action) { return action(); }
+    function traceDiagnostic(action) { return action(); }
+    function traceGeneration(action) { return traceDiagnostic(()=>reviewStep(action)); }
+    function generateRevision(action) { return action(); }
+    for (const source of ['hundredlog','instead']) {
+        const start=()=>{
+            reviewed.events.get('started')('quiet',{},false);
+            return generate(reviewed,{type:'quiet',stream:false});
+        };
+        const response=await (source==='hundredlog'?traceGeneration(start):generateRevision(start));
+        assert.equal(captured.at(-1).silly_pop?.replySource,source,'reply provenance marked before request');
+        reviewed.windowEvents.get('blur')();
         await Promise.all([...requests]);
-        assert.equal(notificationCalls().length,before+1,'re-rendering final reply must not duplicate');
+        const before=notificationCalls().length;
+        response.response.end('{"choices":[{"message":{"content":"reply"}}]}');
+        await (await response.result).text();
+        await until(()=>notificationCalls().length===before+1,'server did not notify while browser was suspended');
+        // No delayed duplicate even if an old tab posts a final publication later.
+        const old=await fetch(`${baseUrl}/api/plugins/silly-pop/completed`,{method:'POST',body:JSON.stringify({
+            source,silly_pop:{...captured.at(-1).silly_pop,type:'published',requestId:'old-'+source}})});
+        assert.equal((await old.json()).result.reason,'retired');
+        assert.equal(notificationCalls().length,before+1);
     }
-    // Historical messages must not notify even if first rendered after startup.
-    eventless.context.chat.push({mes:'old reply',extra:{hundredlog:true,gen_id:1}});
-    eventless.events.get('rendered')(2);
-    // Loading another chat containing a recent answer must seed the baseline.
-    eventless.context.chatId='loaded-other-chat';
-    eventless.context.chat=[{mes:'loaded reply',extra:{hundredlog:true,gen_id:Date.now()}}];
-    eventless.events.get('chatChanged')();
-    eventless.events.get('rendered')(0);
-    await Promise.all([...requests]);
-    assert.equal(notificationCalls().length,8,'history and chat loading must stay silent');
+    reviewed.events.get('ended')();
+    reviewed.events.get('started')('quiet',{},false); // ordinary memory/translation utility
+    const utility=await generate(reviewed,{type:'quiet'});
+    assert(!captured.at(-1).silly_pop,'auxiliary quiet request must not notify');
+    utility.response.end('{}'); await (await utility.result).text();
+    assert.equal(notificationCalls().length,5);
 
-    // Real ST rendering path: 100LOG creates a message with no swipe_info, then
-    // addOneMessage -> refreshSwipeButtons -> ensureSwipes -> syncMesToSwipe.
-    // syncMesToSwipe copies message.extra into swipe_info[n].extra. There is NO
-    // swipe_info[n].gen_id on a normal reply; the ID lives in .extra.gen_id.
-    // See SillyTavern public/script.js ensureSwipes() and syncMesToSwipe().
-    const rendered=browser('st-rendered-extra');
-    rendered.context.extensionSettings.response_notifier.backgroundOnly=false;
-    await rendered.sandbox.testApi.checkCompanion();
-    const finalMessage={is_user:false,is_system:false,mes:'final reply',swipes:['final reply'],swipe_id:0,
-        extra:{hundredlog:true,gen_id:Date.now()}};
-    rendered.context.chat=[{is_user:true,mes:'user'},finalMessage];
-    // Capture the shape AFTER ST's rendering normalization, before its event.
-    finalMessage.swipe_info=[{send_date:finalMessage.send_date,gen_started:undefined,gen_finished:undefined,
-        extra:structuredClone(finalMessage.extra)}];
-    assert.equal(finalMessage.swipe_info[0].gen_id,undefined);
-    rendered.events.get('rendered')(1);
-    await until(()=>notificationCalls().length===9,'ST-rendered nested extra.gen_id was ignored');
-    rendered.events.get('rendered')(1);
-    // Both older 100LOG top-level IDs and ST-normalized nested IDs must dedup.
-    finalMessage.swipe_info[0].gen_id=finalMessage.extra.gen_id;
-    rendered.events.get('rendered')(1);
-    await Promise.all([...requests]);
-    assert.equal(notificationCalls().length,9,'normalized and original metadata refer to the same reply');
-    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, quiet, errors, 100LOG final publication, inSTead reload, cancellation, historical swipes).');
+    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();
     await Promise.allSettled([...requests]);

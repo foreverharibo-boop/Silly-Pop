@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.2.5';
+const VERSION = '2.3.0';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -203,6 +203,7 @@ function getMarker(request) {
         backgroundedDuringGeneration: booleanValue(marker.backgroundedDuringGeneration, false),
         url: safeUrl(marker.url),
         characterName: cleanText(marker.characterName || body?.char_name, 80),
+        replySource: ['hundredlog', 'instead'].includes(marker.replySource) ? marker.replySource : '',
         // The actual request type takes precedence over a copied/stale marker.
         type: cleanText(body?.type || body?.params?.type || marker.type, 30).toLowerCase(),
     };
@@ -230,13 +231,18 @@ function currentState(marker) {
 }
 
 function shouldNotify(marker) {
-    if (!marker.enabled || ['quiet', 'impersonate'].includes(marker.type)) return false;
+    if (!marker.enabled || isExcludedRequest(marker)) return false;
     const state = currentState(marker);
     const visible = state ? state.visible : marker.visibleAtRequest;
     const enabled = state ? state.enabled : marker.enabled;
     const backgroundOnly = state ? state.backgroundOnly : marker.backgroundOnly;
     const backgrounded = state ? state.backgroundedDuringGeneration : marker.backgroundedDuringGeneration;
     return enabled && (!backgroundOnly || !visible || backgrounded);
+}
+
+function isExcludedRequest(marker) {
+    return marker.type === 'impersonate' || (marker.type === 'quiet'
+        && !['hundredlog', 'instead'].includes(marker.replySource));
 }
 
 function recordGeneration(marker, reason, detail) {
@@ -250,7 +256,7 @@ async function handleCompletedResponse(response, marker) {
     if (handledRequests.has(marker.requestId)) return;
     handledRequests.set(marker.requestId, now);
 
-    if (['quiet', 'impersonate'].includes(marker.type)) {
+    if (isExcludedRequest(marker)) {
         recordGeneration(marker, 'excluded', '숨은 생성 또는 사용자 대필 요청이라 생략');
         return;
     }
@@ -271,7 +277,9 @@ async function handleCompletedResponse(response, marker) {
     try {
         const delivery = await runNotification({
             title,
-            content: '답변 생성이 완료됐어요. 눌러서 확인하세요.',
+            content: marker.replySource === 'hundredlog'
+                ? 'AI 응답이 도착했어요. 검수·재작성은 이후에도 이어질 수 있어요.'
+                : 'AI 응답 수신이 완료됐어요.',
             sound: state ? state.sound : marker.sound,
             vibrate: state ? state.vibrate : marker.vibrate,
             url: state?.url || marker.url,
@@ -352,15 +360,9 @@ async function init(router) {
         response.json({ok: true, header: Boolean(header), body: Boolean(body)});
     });
 
-    // Quiet drafts remain excluded. The browser reports only a final published
-    // 100LOG/inSTead reply; use the same preferences and deduplication as HTTP completion.
-    router.post('/completed', async (request, response) => {
-        const marker = getMarker(request);
-        if (!marker || marker.type !== 'published' || !['hundredlog', 'instead'].includes(request.body?.source)) {
-            return response.status(400).json({ok: false, error: 'A supported published reply marker is required'});
-        }
-        await handleCompletedResponse({statusCode: 200}, marker);
-        response.json({ok: true, result: generationResults.get(marker.clientId) || null});
+    // Old tabs must not produce a delayed second notification when reopened.
+    router.post('/completed', (_request, response) => {
+        response.json({ok: true, result: {reason: 'retired', detail: '화면 게시 알림은 사용하지 않습니다. 서버 응답에서 알림을 보냅니다.'}});
     });
 
     // GET is intentional: visibility changes may freeze a mobile browser immediately,
