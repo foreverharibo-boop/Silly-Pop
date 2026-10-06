@@ -22,6 +22,8 @@ let registrationPromise;
 let pendingNotificationTimer;
 let pendingMessage;
 let permissionWarningShown = false;
+let generationActive = false;
+let backgroundedDuringGeneration = false;
 const recentMessageKeys = new Map();
 
 function getContext() {
@@ -210,6 +212,25 @@ function cleanupRecentKeys(now) {
     }
 }
 
+function isPageForeground() {
+    return document.visibilityState === 'visible' && document.hasFocus();
+}
+
+function handleGenerationStarted() {
+    generationActive = true;
+    backgroundedDuringGeneration = !isPageForeground();
+}
+
+function handleGenerationEnded() {
+    generationActive = false;
+}
+
+function handlePageActivityChange() {
+    if (generationActive && !isPageForeground()) {
+        backgroundedDuringGeneration = true;
+    }
+}
+
 function isRealAssistantMessage(message, eventType) {
     if (!message || message.is_user || message.is_system || !message.mes) return false;
     return !['first_message', 'command', 'extension', 'quiet'].includes(String(eventType || '').toLowerCase());
@@ -217,7 +238,9 @@ function isRealAssistantMessage(message, eventType) {
 
 function queueResponseNotification(messageId, eventType) {
     if (!settings.enabled) return;
-    if (settings.backgroundOnly && document.visibilityState === 'visible' && document.hasFocus()) return;
+
+    const shouldNotify = !settings.backgroundOnly || !isPageForeground() || backgroundedDuringGeneration;
+    if (!shouldNotify) return;
 
     const context = getContext();
     const message = context?.chat?.[Number(messageId)];
@@ -229,13 +252,11 @@ function queueResponseNotification(messageId, eventType) {
     if (recentMessageKeys.has(key)) return;
     recentMessageKeys.set(key, now);
 
+    generationActive = false;
+    backgroundedDuringGeneration = false;
     pendingMessage = message;
     clearTimeout(pendingNotificationTimer);
     pendingNotificationTimer = setTimeout(() => {
-        if (settings.backgroundOnly && document.visibilityState === 'visible' && document.hasFocus()) {
-            pendingMessage = undefined;
-            return;
-        }
         const latest = pendingMessage;
         pendingMessage = undefined;
         const name = toPlainText(latest?.name || context?.name2 || '');
@@ -273,7 +294,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.1.1</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.1.2</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -320,9 +341,25 @@ function initialize() {
         return;
     }
 
+    if (eventTypes.GENERATION_STARTED) {
+        context.eventSource.on(eventTypes.GENERATION_STARTED, handleGenerationStarted);
+    }
+    if (eventTypes.GENERATION_ENDED) {
+        context.eventSource.on(eventTypes.GENERATION_ENDED, handleGenerationEnded);
+    }
     context.eventSource.on(eventTypes.MESSAGE_RECEIVED, queueResponseNotification);
-    document.addEventListener('visibilitychange', clearVisibleNotifications);
-    globalThis.addEventListener('focus', updatePermissionStatus);
+    if (eventTypes.CHARACTER_MESSAGE_RENDERED) {
+        context.eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, queueResponseNotification);
+    }
+    document.addEventListener('visibilitychange', () => {
+        handlePageActivityChange();
+        void clearVisibleNotifications();
+    });
+    globalThis.addEventListener('blur', handlePageActivityChange);
+    globalThis.addEventListener('focus', () => {
+        handlePageActivityChange();
+        updatePermissionStatus();
+    });
 
     if (supportsNotifications()) {
         void ensureServiceWorker().catch(error => {
