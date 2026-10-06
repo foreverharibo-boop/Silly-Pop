@@ -63,10 +63,14 @@ public final class NotificationHelper {
         return channel;
     }
 
-    public static void show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
+    public static boolean show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
         createChannels(context);
         NotificationManager manager = context.getSystemService(NotificationManager.class);
-        if (manager == null) return;
+        if (manager == null || !manager.areNotificationsEnabled()) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
 
         String channelId = channelId(sound, vibrate);
         PendingIntent openIntent = PendingIntent.getActivity(
@@ -79,10 +83,12 @@ public final class NotificationHelper {
         RemoteViews compact = new RemoteViews(context.getPackageName(), R.layout.notification_compact);
         compact.setTextViewText(R.id.notificationTitle, title);
         compact.setTextViewText(R.id.notificationBody, body);
+        applyLogoStyle(context, compact);
 
         RemoteViews expanded = new RemoteViews(context.getPackageName(), R.layout.notification_expanded);
         expanded.setTextViewText(R.id.notificationTitle, title);
         expanded.setTextViewText(R.id.notificationBody, body);
+        applyLogoStyle(context, expanded);
 
         Notification notification = new Notification.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
@@ -97,7 +103,26 @@ public final class NotificationHelper {
             .setShowWhen(true)
             .build();
 
-        manager.notify(NEXT_ID.incrementAndGet(), notification);
+        try {
+            manager.notify(NEXT_ID.incrementAndGet(), notification);
+            return true;
+        } catch (SecurityException error) {
+            return false;
+        }
+    }
+
+    private static void applyLogoStyle(Context context, RemoteViews views) {
+        boolean white = "white".equals(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString("launcher_icon_style", "black"));
+        views.setInt(
+            R.id.notificationLogoFrame,
+            "setBackgroundResource",
+            white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black
+        );
+        views.setImageViewResource(
+            R.id.notificationLogo,
+            white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white
+        );
     }
 
     public static Intent createOpenIntent(Context context, String url) {

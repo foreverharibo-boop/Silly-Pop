@@ -13,15 +13,17 @@
         android:orientation="horizontal">
 
         <FrameLayout
+            android:id="@+id/notificationLogoFrame"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:background="@drawable/bg_logo"
-            android:padding="9dp">
+            android:background="@drawable/bg_logo_black"
+            android:padding="6dp">
 
             <ImageView
+                android:id="@+id/notificationLogo"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:src="@drawable/ic_bell_heart" />
+                android:src="@drawable/ic_st_modular_white" />
         </FrameLayout>
 
         <LinearLayout

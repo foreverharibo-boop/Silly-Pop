@@ -29,6 +29,7 @@ let backgroundedDuringGeneration = false;
 let activeGenerationType = '';
 let companionState = { installed: false, ready: false, version: '', detail: '확인 중이에요.' };
 const recentMessageKeys = new Map();
+const urgentStateImages = new Set();
 const clientId = getClientId();
 
 function getClientId() {
@@ -254,6 +255,7 @@ function makeCompanionMarker(type = activeGenerationType) {
         sound: Boolean(settings.sound),
         vibrate: Boolean(settings.vibrate),
         visibleAtRequest: isPageForeground(),
+        backgroundedDuringGeneration,
         url: globalThis.location.href,
         characterName: String(context?.name2 || ''),
     };
@@ -277,6 +279,7 @@ function handleGenerationStarted(type, _params, dryRun = false) {
 function handleGenerationEnded() {
     generationActive = false;
     activeGenerationType = '';
+    void sendCompanionState();
 }
 
 function handlePageActivityChange() {
@@ -374,18 +377,28 @@ async function checkCompanion() {
     return companionState;
 }
 
-async function sendCompanionState() {
+async function sendCompanionState(urgent = false) {
     if (!companionState.installed) return;
     const params = new URLSearchParams({
         clientId,
         visible: isPageForeground() ? '1' : '0',
         enabled: settings.enabled ? '1' : '0',
         backgroundOnly: settings.backgroundOnly ? '1' : '0',
+        backgroundedDuringGeneration: backgroundedDuringGeneration ? '1' : '0',
         sound: settings.sound ? '1' : '0',
         vibrate: settings.vibrate ? '1' : '0',
         url: globalThis.location.href,
         ts: String(Date.now()),
     });
+
+    if (urgent && typeof Image === 'function') {
+        const image = new Image();
+        urgentStateImages.add(image);
+        const cleanup = () => urgentStateImages.delete(image);
+        image.onload = cleanup;
+        image.onerror = cleanup;
+        image.src = `${COMPANION_API}/state?${params}`;
+    }
 
     try {
         await fetch(`${COMPANION_API}/state?${params}`, {
@@ -433,7 +446,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.0</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.1</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -516,12 +529,12 @@ function initialize() {
     }
     document.addEventListener('visibilitychange', () => {
         handlePageActivityChange();
-        void sendCompanionState();
+        void sendCompanionState(true);
         void clearVisibleNotifications();
     });
     globalThis.addEventListener('blur', () => {
         handlePageActivityChange();
-        void sendCompanionState();
+        void sendCompanionState(true);
     });
     globalThis.addEventListener('focus', () => {
         handlePageActivityChange();

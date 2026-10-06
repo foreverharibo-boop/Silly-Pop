@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -17,6 +17,7 @@ const NOTIFICATION_TIMEOUT_MS = 5000;
 const APP_PACKAGE = 'com.foreverharibo.sillypop';
 const APP_RECEIVER = `${APP_PACKAGE}/.SillyPopReceiver`;
 const APP_ACTION = `${APP_PACKAGE}.NOTIFY`;
+const APP_PING_ACTION = `${APP_PACKAGE}.PING`;
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
     '/api/backends/text-completions/generate',
@@ -29,6 +30,7 @@ const clientStates = new Map();
 const handledRequests = new Map();
 const originalEnd = http.ServerResponse.prototype.end;
 let patched = false;
+let lastCompanionCheck = { checkedAt: 0, installed: false };
 
 function getBridgeCommand() {
     if (process.env.SILLY_POP_BRIDGE_COMMAND) {
@@ -54,17 +56,29 @@ function companionAppInstalled() {
     if (process.env.SILLY_POP_COMPANION_INSTALLED) {
         return process.env.SILLY_POP_COMPANION_INSTALLED === '1';
     }
-    if (process.env.SILLY_POP_BRIDGE_COMMAND) return bridgeCommandExists();
     if (!bridgeCommandExists()) return false;
 
+    const now = Date.now();
+    if (now - lastCompanionCheck.checkedAt < 15000) return lastCompanionCheck.installed;
+
     try {
-        const result = spawnSync('/system/bin/cmd', ['package', 'path', APP_PACKAGE], {
+        const result = spawnSync(getBridgeCommand(), [
+            'broadcast',
+            '--receiver-foreground',
+            '--include-stopped-packages',
+            '-n', APP_RECEIVER,
+            '-a', APP_PING_ACTION,
+        ], {
             encoding: 'utf8',
-            timeout: 1500,
+            timeout: 2500,
             windowsHide: true,
         });
-        return result.status === 0 && String(result.stdout || '').includes(`package:`);
+        const output = `${result.stdout || ''} ${result.stderr || ''}`;
+        const installed = result.status === 0 && /result=-1\b/.test(output);
+        lastCompanionCheck = { checkedAt: now, installed };
+        return installed;
     } catch {
+        lastCompanionCheck = { checkedAt: now, installed: false };
         return false;
     }
 }
@@ -101,8 +115,8 @@ function runNotification({ title, content, sound, vibrate, url }) {
 
         const args = [
             'broadcast',
-            '--user', '0',
             '--receiver-foreground',
+            '--include-stopped-packages',
             '-n', APP_RECEIVER,
             '-a', APP_ACTION,
             '--es', 'title', cleanText(title, 120) || 'Silly-Pop',
@@ -138,8 +152,13 @@ function runNotification({ title, content, sound, vibrate, url }) {
             clearTimeout(timer);
             const output = cleanText(`${stdout} ${stderr}`, 700);
             const failed = /(?:error|exception|unable|not found)/i.test(output);
-            if (code === 0 && !failed) resolve();
-            else reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
+            const received = /result=-1\b/.test(output) || process.env.SILLY_POP_ASSUME_BROADCAST_RESULT === '1';
+            if (code === 0 && !failed && received) resolve();
+            else if (/notification-permission-disabled/i.test(output)) {
+                reject(new Error('Silly-Pop 앱의 알림 권한이 꺼져 있습니다. 앱을 열어 권한을 다시 허용해 주세요.'));
+            } else {
+                reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
+            }
         });
     });
 }
@@ -163,6 +182,7 @@ function getMarker(request) {
         sound: booleanValue(marker.sound, true),
         vibrate: booleanValue(marker.vibrate, true),
         visibleAtRequest: booleanValue(marker.visibleAtRequest, true),
+        backgroundedDuringGeneration: booleanValue(marker.backgroundedDuringGeneration, false),
         url: safeUrl(marker.url),
         characterName: cleanText(marker.characterName || body?.char_name, 80),
         type: cleanText(marker.type || body?.type, 30).toLowerCase(),
@@ -184,7 +204,8 @@ function shouldNotify(marker) {
     const visible = state ? state.visible : marker.visibleAtRequest;
     const enabled = state ? state.enabled : marker.enabled;
     const backgroundOnly = state ? state.backgroundOnly : marker.backgroundOnly;
-    return enabled && (!backgroundOnly || !visible);
+    const backgrounded = state ? state.backgroundedDuringGeneration : marker.backgroundedDuringGeneration;
+    return enabled && (!backgroundOnly || !visible || backgrounded);
 }
 
 function handleCompletedResponse(response, marker) {
@@ -255,21 +276,26 @@ async function init(router) {
 
     // GET is intentional: visibility changes may freeze a mobile browser immediately,
     // and a small keepalive GET is the most reliable way to record the final state.
-    router.get('/state', (request, response) => {
-        const clientId = cleanText(request.query.clientId, 100);
+    const updateState = (request, response) => {
+        const input = request.method === 'POST' ? request.body || {} : request.query || {};
+        const clientId = cleanText(input.clientId, 100);
         if (!clientId) return response.status(400).json({ ok: false, error: 'clientId is required' });
         clientStates.set(clientId, {
-            visible: booleanValue(request.query.visible, true),
-            enabled: booleanValue(request.query.enabled, true),
-            backgroundOnly: booleanValue(request.query.backgroundOnly, true),
-            sound: booleanValue(request.query.sound, true),
-            vibrate: booleanValue(request.query.vibrate, true),
-            url: safeUrl(request.query.url),
+            visible: booleanValue(input.visible, true),
+            enabled: booleanValue(input.enabled, true),
+            backgroundOnly: booleanValue(input.backgroundOnly, true),
+            backgroundedDuringGeneration: booleanValue(input.backgroundedDuringGeneration, false),
+            sound: booleanValue(input.sound, true),
+            vibrate: booleanValue(input.vibrate, true),
+            url: safeUrl(input.url),
             updatedAt: Date.now(),
         });
         pruneState();
         return response.json({ ok: true });
-    });
+    };
+
+    router.get('/state', updateState);
+    router.post('/state', updateState);
 
     router.post('/test', async (request, response) => {
         try {
@@ -294,6 +320,7 @@ async function exit() {
     restoreResponseEnd();
     clientStates.clear();
     handledRequests.clear();
+    lastCompanionCheck = { checkedAt: 0, installed: false };
 }
 
 module.exports = { info, init, exit };

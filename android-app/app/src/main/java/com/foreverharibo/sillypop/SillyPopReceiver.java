@@ -7,10 +7,17 @@ import android.net.Uri;
 
 public final class SillyPopReceiver extends BroadcastReceiver {
     public static final String ACTION_NOTIFY = "com.foreverharibo.sillypop.NOTIFY";
+    public static final String ACTION_PING = "com.foreverharibo.sillypop.PING";
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (intent == null || !ACTION_NOTIFY.equals(intent.getAction())) return;
+        if (intent == null) return;
+        if (ACTION_PING.equals(intent.getAction())) {
+            setResultCode(ActivityResultCodes.OK);
+            setResultData("silly-pop-ready");
+            return;
+        }
+        if (!ACTION_NOTIFY.equals(intent.getAction())) return;
 
         String title = clean(intent.getStringExtra("title"), 120);
         String body = clean(intent.getStringExtra("body"), 280);
@@ -27,8 +34,9 @@ public final class SillyPopReceiver extends BroadcastReceiver {
             .putString(NotificationHelper.KEY_LAST_URL, url)
             .apply();
 
-        NotificationHelper.show(context, title, body, url, sound, vibrate);
-        setResultCode(ActivityResultCodes.OK);
+        boolean shown = NotificationHelper.show(context, title, body, url, sound, vibrate);
+        setResultCode(shown ? ActivityResultCodes.OK : ActivityResultCodes.CANCELED);
+        setResultData(shown ? "ok" : "notification-permission-disabled");
     }
 
     private static String clean(String value, int maxLength) {
@@ -53,5 +61,6 @@ public final class SillyPopReceiver extends BroadcastReceiver {
 
     private static final class ActivityResultCodes {
         private static final int OK = -1;
+        private static final int CANCELED = 0;
     }
 }

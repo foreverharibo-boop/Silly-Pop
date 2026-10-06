@@ -3,6 +3,7 @@ const http = require('node:http');
 
 process.env.SILLY_POP_BRIDGE_COMMAND = '/bin/true';
 process.env.SILLY_POP_COMPANION_INSTALLED = '1';
+process.env.SILLY_POP_ASSUME_BROADCAST_RESULT = '1';
 
 const plugin = require('./index.cjs');
 
