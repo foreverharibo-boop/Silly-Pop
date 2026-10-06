@@ -55,7 +55,7 @@
             <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
                 android:text="외부 서버 전송 없음\n파일·연락처·문자 권한 없음" android:tag="secondary" android:textSize="11sp" android:lineSpacingExtra="4dp" />
         </LinearLayout>
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="28dp"
+        <TextView android:id="@+id/versionFooter" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="28dp"
             android:text="@string/footer" android:tag="secondary" android:textSize="10sp" />
     </LinearLayout>
 </ScrollView>
