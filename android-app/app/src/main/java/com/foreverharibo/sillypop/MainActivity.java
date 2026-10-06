@@ -96,7 +96,6 @@ public final class MainActivity extends Activity {
         boolean shown = NotificationHelper.show(
             this,
             "Silly-Pop 테스트",
-            "테스트 알림이 도착했어요.",
             url,
             true,
             true

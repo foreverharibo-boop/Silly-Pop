@@ -78,30 +78,29 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.7-test.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.7-test.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.8-test.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.8-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.2.7-test
-          path: Silly-Pop-v0.2.7-test.apk
+          name: Silly-Pop-v0.2.8-test
+          path: Silly-Pop-v0.2.8-test.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish test release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.7-test
-          name: Silly-Pop v0.2.7-test
+          tag_name: v0.2.8-test
+          name: Silly-Pop v0.2.8-test
           prerelease: true
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v0.2.7 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v0.2.8 테스트 버전입니다.
 
-            - 앱 기본 아이콘·홈 아이콘·알림 이미지를 흰 배경과 검정 S·별 로고로 통일
-            - 삼성 팝업이 참조하는 기본 앱 아이콘도 화이트로 변경
-            - 블랙 테마와 색상 선택 UI 제거, 앱 화면은 화이트로 고정
-            - 기존 블랙/화이트 홈 바로가기는 업데이트 후에도 실행 가능
-            - 기존 자동 알림 감지·전송 방식 유지, 서버/확장 추가 업데이트 불필요
+            - 답변 알림 아래의 설명 문구를 제거하고 제목만 표시
+            - 알림을 펼쳐도 별도 본문 문구 없이 표시
+            - 화이트 아이콘과 기존 자동 알림 감지·전송 방식 유지
+            - 앱만 덮어 설치하면 적용, 서버/확장 추가 업데이트 불필요
             - 0.2.1 이상에서 삭제 없이 덮어 설치 가능
-          files: Silly-Pop-v0.2.7-test.apk
+          files: Silly-Pop-v0.2.8-test.apk

@@ -84,7 +84,7 @@ public final class CompanionTest {
         notifications.cancelAll();
         assertTrue(context.getSharedPreferences(NotificationHelper.PREFERENCES, Context.MODE_PRIVATE)
             .edit().putString("launcher_icon_style", "black").commit());
-        assertTrue(NotificationHelper.show(context, "WhiteRegression", "Keep this text",
+        assertTrue(NotificationHelper.show(context, "WhiteRegression",
             NotificationHelper.DEFAULT_SILLY_URL, false, false));
         StatusBarNotification original = notifications.getActiveNotifications()[0];
         assertWhiteNotification(context, original.getNotification());
@@ -120,7 +120,7 @@ public final class CompanionTest {
                 assertEquals("Refreshing an old notification must not duplicate it", 1, active.length);
                 assertEquals(original.getId(), active[0].getId());
                 Notification updated = active[0].getNotification();
-                assertEquals("Keep this text", updated.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
+                assertEquals("WhiteRegression", updated.extras.getCharSequence(Notification.EXTRA_TITLE).toString());
                 assertEquals(original.getNotification().when, updated.when);
                 assertTrue((updated.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
                 assertWhiteNotification(context, updated);
@@ -160,6 +160,8 @@ public final class CompanionTest {
     }
 
     private static void assertWhiteNotification(Context context, Notification notification) {
+        assertNull("Title-only notifications must omit the body", notification.extras.getCharSequence(Notification.EXTRA_TEXT));
+        assertNull("Expanded notifications must also omit the body", notification.extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
         assertNotNull("Notification must carry its white S-star icon", notification.getLargeIcon());
         assertWhiteIcon(notification.getLargeIcon().loadDrawable(context));
     }

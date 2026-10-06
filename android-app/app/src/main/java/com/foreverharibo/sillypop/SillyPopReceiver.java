@@ -21,13 +21,12 @@ public final class SillyPopReceiver extends BroadcastReceiver {
         if (!ACTION_NOTIFY.equals(intent.getAction())) return;
 
         String title = clean(intent.getStringExtra("title"), 120);
-        String body = clean(intent.getStringExtra("body"), 280);
+        // Older server plugins still send a body; notifications now show only the title.
         String url = safeUrl(intent.getStringExtra("url"));
         boolean sound = intent.getBooleanExtra("sound", true);
         boolean vibrate = intent.getBooleanExtra("vibrate", true);
 
-        if (title.isEmpty()) title = "Silly-Pop";
-        if (body.isEmpty()) body = "답변이 도착했어요. 눌러서 확인하세요 ✨";
+        if (title.isEmpty()) title = "답변이 도착했어요";
         if (url.isEmpty()) url = NotificationHelper.DEFAULT_SILLY_URL;
 
         context.getSharedPreferences(NotificationHelper.PREFERENCES, Context.MODE_PRIVATE)
@@ -35,7 +34,7 @@ public final class SillyPopReceiver extends BroadcastReceiver {
             .putString(NotificationHelper.KEY_LAST_URL, url)
             .apply();
 
-        boolean shown = NotificationHelper.show(context, title, body, url, sound, vibrate);
+        boolean shown = NotificationHelper.show(context, title, url, sound, vibrate);
         setResultCode(shown ? ActivityResultCodes.OK : ActivityResultCodes.CANCELED);
         setResultData(shown ? "ok" : "notification-permission-disabled");
     }

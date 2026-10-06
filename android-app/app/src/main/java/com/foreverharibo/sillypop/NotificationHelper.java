@@ -74,7 +74,7 @@ public final class NotificationHelper {
         return true;
     }
 
-    public static boolean show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
+    public static boolean show(Context context, String title, String url, boolean sound, boolean vibrate) {
         createChannels(context);
         if (!canNotify(context)) return false;
         NotificationManager manager = context.getSystemService(NotificationManager.class);
@@ -87,11 +87,9 @@ public final class NotificationHelper {
             .setSmallIcon(R.drawable.ic_notification)
             .setLargeIcon(createWhiteIcon(context))
             .setContentTitle(title)
-            .setContentText(body)
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
-            .setStyle(new Notification.BigTextStyle().bigText(body))
             .setShowWhen(true);
         if (target != null) {
             builder.setContentIntent(PendingIntent.getActivity(context, NEXT_ID.incrementAndGet(), target,
