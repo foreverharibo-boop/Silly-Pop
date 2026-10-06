@@ -13,7 +13,6 @@ import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Browser;
-import android.widget.RemoteViews;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -80,26 +79,15 @@ public final class NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        RemoteViews compact = new RemoteViews(context.getPackageName(), R.layout.notification_compact);
-        compact.setTextViewText(R.id.notificationTitle, title);
-        compact.setTextViewText(R.id.notificationBody, body);
-        applyLogoStyle(context, compact);
-
-        RemoteViews expanded = new RemoteViews(context.getPackageName(), R.layout.notification_expanded);
-        expanded.setTextViewText(R.id.notificationTitle, title);
-        expanded.setTextViewText(R.id.notificationBody, body);
-        applyLogoStyle(context, expanded);
-
         Notification notification = new Notification.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
-            .setColor(context.getColor(R.color.lavender_500))
+            .setContentTitle(title)
+            .setContentText(body)
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setAutoCancel(true)
             .setContentIntent(openIntent)
-            .setCustomContentView(compact)
-            .setCustomBigContentView(expanded)
-            .setStyle(new Notification.DecoratedCustomViewStyle())
+            .setStyle(new Notification.BigTextStyle().bigText(body))
             .setShowWhen(true)
             .build();
 
@@ -109,20 +97,6 @@ public final class NotificationHelper {
         } catch (SecurityException error) {
             return false;
         }
-    }
-
-    private static void applyLogoStyle(Context context, RemoteViews views) {
-        boolean white = "white".equals(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .getString("launcher_icon_style", "black"));
-        views.setInt(
-            R.id.notificationLogoFrame,
-            "setBackgroundResource",
-            white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black
-        );
-        views.setImageViewResource(
-            R.id.notificationLogo,
-            white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white
-        );
     }
 
     public static Intent createOpenIntent(Context context, String url) {

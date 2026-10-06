@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
-const VERSION = '2.1.0';
+const VERSION = '2.1.1';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -31,6 +31,12 @@ const handledRequests = new Map();
 const originalEnd = http.ServerResponse.prototype.end;
 let patched = false;
 let lastCompanionCheck = { checkedAt: 0, installed: false };
+
+function broadcastCompleted(code, output) {
+    if (code !== 0) return false;
+    if (/(?:error|exception|unable|not found|does not exist|permission denial)/i.test(output)) return false;
+    return /(?:broadcast completed|broadcasting:|silly-pop-ready|result=-1\b)/i.test(output);
+}
 
 function getBridgeCommand() {
     if (process.env.SILLY_POP_BRIDGE_COMMAND) {
@@ -74,7 +80,11 @@ function companionAppInstalled() {
             windowsHide: true,
         });
         const output = `${result.stdout || ''} ${result.stderr || ''}`;
-        const installed = result.status === 0 && /result=-1\b/.test(output);
+        // Some Samsung/Android builds always report result=0 for an exported
+        // receiver even when it handled the broadcast. A completed explicit
+        // broadcast is enough; missing components still emit an error and are
+        // rejected by broadcastCompleted().
+        const installed = broadcastCompleted(result.status, output);
         lastCompanionCheck = { checkedAt: now, installed };
         return installed;
     } catch {
@@ -151,11 +161,10 @@ function runNotification({ title, content, sound, vibrate, url }) {
         child.once('exit', code => {
             clearTimeout(timer);
             const output = cleanText(`${stdout} ${stderr}`, 700);
-            const failed = /(?:error|exception|unable|not found)/i.test(output);
-            const received = /result=-1\b/.test(output) || process.env.SILLY_POP_ASSUME_BROADCAST_RESULT === '1';
-            if (code === 0 && !failed && received) resolve();
-            else if (/notification-permission-disabled/i.test(output)) {
+            if (/notification-permission-disabled/i.test(output)) {
                 reject(new Error('Silly-Pop 앱의 알림 권한이 꺼져 있습니다. 앱을 열어 권한을 다시 허용해 주세요.'));
+            } else if (broadcastCompleted(code, output) || process.env.SILLY_POP_ASSUME_BROADCAST_RESULT === '1') {
+                resolve();
             } else {
                 reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
             }
@@ -323,4 +332,4 @@ async function exit() {
     lastCompanionCheck = { checkedAt: 0, installed: false };
 }
 
-module.exports = { info, init, exit };
+module.exports = { info, init, exit, __test: { broadcastCompleted } };

@@ -43,7 +43,7 @@ SillyTavern에서 AI 답변 생성이 완료되면 시스템 알림으로 알려
 
 ### 1. Silly-Pop APK 설치
 
-1. GitHub Actions에서 생성된 `Silly-Pop-v0.2.0-test.apk`를 설치합니다.
+1. GitHub Actions에서 생성된 `Silly-Pop-v0.2.1-test.apk`를 설치합니다.
 2. 앱을 열고 `알림 권한 허용`을 누릅니다.
 3. 앱의 `테스트 알림 보내기`로 알림 표시를 확인합니다.
 

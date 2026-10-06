@@ -10,13 +10,26 @@ android {
         applicationId 'com.foreverharibo.sillypop'
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName '0.2.0'
+        versionCode 3
+        versionName '0.2.1'
+    }
+
+    signingConfigs {
+        release {
+            def signingFile = System.getenv('SILLY_POP_SIGNING_STORE_FILE')
+            if (signingFile) {
+                storeFile file(signingFile)
+                storePassword System.getenv('SILLY_POP_SIGNING_PASSWORD')
+                keyAlias 'silly-pop'
+                keyPassword System.getenv('SILLY_POP_SIGNING_PASSWORD')
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

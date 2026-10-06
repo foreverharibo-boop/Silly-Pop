@@ -7,6 +7,11 @@ process.env.SILLY_POP_ASSUME_BROADCAST_RESULT = '1';
 
 const plugin = require('./index.cjs');
 
+assert.equal(plugin.__test.broadcastCompleted(0, 'Broadcast completed: result=0'), true);
+assert.equal(plugin.__test.broadcastCompleted(0, 'Broadcast completed: result=-1, data="silly-pop-ready"'), true);
+assert.equal(plugin.__test.broadcastCompleted(0, 'Error: receiver not found'), false);
+assert.equal(plugin.__test.broadcastCompleted(1, 'Broadcast completed: result=0'), false);
+
 function makeResponse() {
     return {
         statusCode: 200,

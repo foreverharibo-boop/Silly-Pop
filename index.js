@@ -28,6 +28,7 @@ let generationActive = false;
 let backgroundedDuringGeneration = false;
 let activeGenerationType = '';
 let companionState = { installed: false, ready: false, version: '', detail: '확인 중이에요.' };
+let lastToast = { key: '', at: 0 };
 const recentMessageKeys = new Map();
 const urgentStateImages = new Set();
 const clientId = getClientId();
@@ -70,6 +71,10 @@ function getRequestHeaders() {
 }
 
 function toast(type, message, title = 'Silly-Pop') {
+    const now = Date.now();
+    const key = `${type}\n${title}\n${message}`;
+    if (lastToast.key === key && now - lastToast.at < 1800) return;
+    lastToast = { key, at: now };
     if (globalThis.toastr?.[type]) {
         globalThis.toastr[type](message, title);
         return;
@@ -446,7 +451,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.1</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.2</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
