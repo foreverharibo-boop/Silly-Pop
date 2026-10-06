@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.2.4';
+const REQUIRED_BRIDGE_VERSION = '2.2.5';
 const MARKER_HEADER = 'X-Silly-Pop';
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
@@ -35,6 +35,90 @@ const clientId = getClientId();
 let lastStateTimestamp = 0;
 const diagnosticEvents = [];
 let probeDetail = '전송 경로 검사: 연결 확인을 누르면 검사합니다.';
+let pendingQuietReply;
+
+function currentChatKey(context) {
+    const id = context?.getCurrentChatId?.() ?? context?.chatId;
+    return id == null ? null : JSON.stringify([context.characterId ?? null, context.groupId ?? null, id]);
+}
+
+// These extensions publish user-visible replies after one or more quiet calls.
+// Observe their completed message metadata, never quiet HTTP completion itself.
+function publishedReply(message, index, swipeId = message?.swipe_id ?? 0) {
+    if (!message || message.is_user || message.is_system) return null;
+    const swipe = message.swipe_info?.[swipeId];
+    if (swipe?.extra?.api === 'inSTead' && swipe.extra.instead_revised && swipe.gen_finished) {
+        return { source: 'instead', key: JSON.stringify(['instead', index, swipeId, swipe.gen_started, swipe.gen_finished]) };
+    }
+    const generationId = swipe?.extra?.hundredlog ? swipe.gen_id
+        : swipeId === (message.swipe_id ?? 0) && message.extra?.hundredlog ? message.extra.gen_id : null;
+    if (generationId) return { source: 'hundredlog', key: JSON.stringify(['hundredlog', index, generationId]) };
+    return null;
+}
+
+function watchQuietReply() {
+    const context = getContext();
+    if (!Array.isArray(context?.chat)) return;
+    const chatKey = currentChatKey(context);
+    if (pendingQuietReply && pendingQuietReply.chatKey === chatKey
+        && (chatKey !== null || pendingQuietReply.chat === context.chat)
+        && Date.now() - pendingQuietReply.startedAt < 30 * 60 * 1000) return;
+    const known = new Set();
+    context.chat.forEach((message, index) => {
+        // Root extra can survive navigation to an older swipe or an inSTead edit.
+        // Its generation identity must remain known regardless of selected swipe.
+        if (message.extra?.hundredlog && message.extra.gen_id) {
+            known.add(JSON.stringify(['hundredlog', index, message.extra.gen_id]));
+        }
+        for (let swipe = 0; swipe < Math.max(message.swipes?.length || 0, 1); swipe++) {
+            const reply = publishedReply(message, index, swipe);
+            if (reply) known.add(reply.key);
+        }
+    });
+    pendingQuietReply = { chatKey, chat: context.chat, known, startedAt: Date.now(),
+        backgrounded: !isPageForeground(), requestId: makeCompanionMarker('published').requestId };
+}
+
+function handlePublishedReply(index) {
+    const pending = pendingQuietReply;
+    if (!pending) return;
+    const context = getContext();
+    if (Date.now() - pending.startedAt >= 30 * 60 * 1000 || currentChatKey(context) !== pending.chatKey
+        || (pending.chatKey === null && context?.chat !== pending.chat)) {
+        pendingQuietReply = undefined;
+        return;
+    }
+    const message = context?.chat?.[index];
+    const reply = publishedReply(message, index);
+    if (!reply || pending.known.has(reply.key) || !String(message.mes || '').trim()) return;
+    // Clear before scheduling I/O: duplicate render/reload events cannot dispatch twice.
+    pendingQuietReply = undefined;
+    const marker = makeCompanionMarker('published');
+    marker.requestId = pending.requestId;
+    marker.backgroundedDuringGeneration = pending.backgrounded;
+    traceGeneration(`최종 답변 게시 감지 (${reply.source === 'hundredlog' ? '100LOG' : 'inSTead'})`);
+    void (async () => {
+        try {
+            const response = await fetch(`${COMPANION_API}/completed`, {
+                method: 'POST', headers: getRequestHeaders(), keepalive: true,
+                body: JSON.stringify({ source: reply.source, silly_pop: marker }),
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const result = await response.json();
+            traceGeneration(`최종 답변 알림: ${result.result?.detail || '서버 접수'}`);
+        } catch (error) {
+            traceGeneration(`최종 답변 알림 전송 실패: ${String(error.message).slice(0, 100)}`);
+        }
+    })();
+}
+
+function handleReplyChatChanged() {
+    // inSTead saves and reloads the chat instead of emitting a render event.
+    const chat = getContext()?.chat;
+    if (!pendingQuietReply || !Array.isArray(chat)) return;
+    for (let index = 0; index < chat.length && pendingQuietReply; index++) handlePublishedReply(index);
+    if (pendingQuietReply && currentChatKey(getContext()) !== pendingQuietReply.chatKey) pendingQuietReply = undefined;
+}
 
 function traceGeneration(detail) {
     diagnosticEvents.push(`${new Date().toLocaleTimeString()} ${detail}`);
@@ -253,8 +337,10 @@ function installRequestHook() {
 }
 
 function handleGenerationStarted(type, _params, dryRun = false) {
+    if (!dryRun && String(type).toLowerCase() === 'quiet') watchQuietReply();
     if (!dryRun) traceGeneration(`생성 시작: ${diagnosticType(type)}${isNotifiableGeneration(type) ? '' : ' (알림 제외)'}`);
     if (dryRun || !isNotifiableGeneration(type)) return;
+    pendingQuietReply = undefined;
     generationActive = true;
     activeGenerationType = String(type || 'normal');
     backgroundedDuringGeneration = !isPageForeground();
@@ -269,6 +355,7 @@ function handleGenerationEnded() {
 }
 
 function handlePageActivityChange(forceHidden = false) {
+    if (pendingQuietReply && (forceHidden || !isPageForeground())) pendingQuietReply.backgrounded = true;
     if (generationActive && (forceHidden || !isPageForeground())) {
         backgroundedDuringGeneration = true;
     }
@@ -285,7 +372,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.4 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.4.5 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -421,7 +508,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.4</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.5</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -502,6 +589,13 @@ function initialize() {
     }
     if (eventTypes.CHAT_COMPLETION_SETTINGS_READY) {
         context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markGenerationPayload);
+    }
+    if (eventTypes.CHARACTER_MESSAGE_RENDERED) {
+        context.eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, handlePublishedReply);
+    }
+    if (eventTypes.CHAT_CHANGED) context.eventSource.on(eventTypes.CHAT_CHANGED, handleReplyChatChanged);
+    if (eventTypes.GENERATION_STOPPED) {
+        context.eventSource.on(eventTypes.GENERATION_STOPPED, () => { pendingQuietReply = undefined; });
     }
     document.addEventListener('visibilitychange', () => {
         handlePageActivityChange();

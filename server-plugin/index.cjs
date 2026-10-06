@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.2.4';
+const VERSION = '2.2.5';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -350,6 +350,17 @@ async function init(router) {
         const header = getMarker({headers: request.headers});
         const body = getMarker({body: request.body});
         response.json({ok: true, header: Boolean(header), body: Boolean(body)});
+    });
+
+    // Quiet drafts remain excluded. The browser reports only a final published
+    // 100LOG/inSTead reply; use the same preferences and deduplication as HTTP completion.
+    router.post('/completed', async (request, response) => {
+        const marker = getMarker(request);
+        if (!marker || marker.type !== 'published' || !['hundredlog', 'instead'].includes(request.body?.source)) {
+            return response.status(400).json({ok: false, error: 'A supported published reply marker is required'});
+        }
+        await handleCompletedResponse({statusCode: 200}, marker);
+        response.json({ok: true, result: generationResults.get(marker.clientId) || null});
     });
 
     // GET is intentional: visibility changes may freeze a mobile browser immediately,

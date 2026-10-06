@@ -19,6 +19,7 @@ const routes = {GET:new Map(), POST:new Map()};
 const pending = [];
 const captured = [];
 const capturedMarkers = [];
+const completed = [];
 let baseUrl;
 let holdNextState;
 const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
@@ -43,6 +44,7 @@ const server = http.createServer(async (request,response)=>{
         response.status = code => { response.statusCode=code; return response; };
         response.json = value => {response.setHeader('Content-Type','application/json'); response.end(JSON.stringify(value));};
         const apiPath=url.pathname.replace('/api/plugins/silly-pop','');
+        if (apiPath === '/completed') completed.push(request.body);
         const handler=routes[request.method]?.get(apiPath);
         if(handler) return await handler(request,response);
         if(url.pathname==='/api/backends/chat-completions/generate') {
@@ -57,8 +59,9 @@ const server = http.createServer(async (request,response)=>{
 
 function browser(clientId) {
     const events=new Map(), pageEvents=new Map(), windowEvents=new Map();
-    const context={extensionSettings:{}, name2:'Test', eventTypes:{GENERATION_STARTED:'started',
-        GENERATION_ENDED:'ended',CHAT_COMPLETION_SETTINGS_READY:'payload',GENERATE_AFTER_DATA:'data'},
+    const context={extensionSettings:{}, name2:'Test', chatId:'chat-a', characterId:0, chat:[],
+        eventTypes:{GENERATION_STARTED:'started', CHARACTER_MESSAGE_RENDERED:'rendered', CHAT_CHANGED:'chatChanged',
+        GENERATION_STOPPED:'stopped', GENERATION_ENDED:'ended',CHAT_COMPLETION_SETTINGS_READY:'payload',GENERATE_AFTER_DATA:'data'},
         eventSource:{on:(event,fn)=>events.set(event,fn)}};
     const sandbox={console,URL,URLSearchParams,Request,Headers,AbortSignal,Date,Math,setTimeout,clearTimeout,
         location:{href:`${baseUrl}/`},
@@ -179,7 +182,104 @@ async function generate(client,payload) {
     pending.at(-1).end('{}'); await (await raw).text();
     await until(()=>notificationCalls().length===3,'eventless HTTP main request was not dispatched');
     assert.equal((await status('another-client')).lastGeneration,null,'diagnostics are scoped to each client');
-    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, quiet, errors).');
+
+    // Reproduce the real 100LOG path: normal intercepted, quiet draft, review,
+    // quiet rewrite, then a final published answer. No alert for either AI draft.
+    const reviewed=browser('reviewed');
+    await reviewed.sandbox.testApi.checkCompanion();
+    reviewed.context.chat=[{is_user:true,mes:'private prompt'}];
+    reviewed.events.get('started')('normal',{},false);
+    reviewed.events.get('started')('quiet',{},false);
+    reviewed.windowEvents.get('blur')();
+    const draft=await generate(reviewed,{type:'quiet'});
+    draft.response.end('{}'); await (await draft.result).text();
+    reviewed.events.get('ended')();
+    reviewed.events.get('started')('quiet',{},false);
+    const rewrite=await generate(reviewed,{type:'quiet'});
+    rewrite.response.end('{}'); await (await rewrite.result).text();
+    reviewed.events.get('ended')();
+    reviewed.events.get('started')('normal',{},true); // dry run must not disarm final publication.
+    await Promise.all([...requests]);
+    assert.equal(notificationCalls().length,3,'draft/review/rewrite must stay silent');
+    const answer={is_user:false,mes:'private final reply',swipes:['private final reply'],swipe_id:0,
+        extra:{hundredlog:true,gen_id:1234}};
+    reviewed.context.chat.push(answer);
+    reviewed.events.get('rendered')(1);
+    reviewed.events.get('rendered')(1);
+    reviewed.events.get('chatChanged')();
+    await until(async()=>(await status('reviewed')).lastGeneration?.reason==='dispatched','100LOG final reply was not dispatched');
+    assert.equal(notificationCalls().length,4);
+    assert.equal(completed.length,1,'duplicate render and reload only report once');
+    assert(!JSON.stringify(completed).includes('private'),'no reply, prompt, or feedback sent to bridge');
+    const replay=await fetch(`${baseUrl}/api/plugins/silly-pop/completed`,{method:'POST',body:JSON.stringify(completed[0])});
+    assert.equal(replay.status,200); await replay.json();
+    assert.equal(notificationCalls().length,4,'server deduplicates repeated completion');
+
+    // Existing replies and old swipe navigation during auxiliary quiet calls stay silent.
+    reviewed.events.get('started')('quiet',{},false);
+    reviewed.events.get('rendered')(1);
+    reviewed.events.get('chatChanged')();
+    assert.equal(completed.length,2); // includes explicit HTTP replay above.
+    // 100LOG adds a final swipe with new generation identity.
+    answer.swipes.push('new private swipe');
+    answer.swipe_id=1; answer.mes='new private swipe';
+    answer.swipe_info=[{}, {gen_id:1235,extra:{hundredlog:true}}];
+    answer.extra.gen_id=1235;
+    reviewed.context.extensionSettings.response_notifier.backgroundOnly=false;
+    reviewed.events.get('rendered')(1);
+    await until(()=>notificationCalls().length===5,'100LOG final swipe did not notify');
+
+    // inSTead creates an unfinished placeholder before quiet generation, then
+    // saves a finished revision and reloads the same chat (new message objects).
+    answer.swipes.push(''); answer.swipe_id=2;
+    answer.swipe_info.push({gen_started:'start',gen_finished:null,extra:{api:'inSTead',instead_revised:true}});
+    reviewed.events.get('started')('quiet',{},false);
+    reviewed.events.get('rendered')(1); // unfinished must not notify.
+    answer.swipe_id=0;
+    reviewed.events.get('rendered')(1); // older swipe with inherited root metadata.
+    answer.swipe_id=2;
+    await Promise.all([...requests]);
+    assert.equal(notificationCalls().length,5);
+    answer.mes='private revision'; answer.swipes[2]=answer.mes;
+    answer.swipe_info[2].gen_finished='finish';
+    reviewed.events.get('ended')();
+    reviewed.context.chat=JSON.parse(JSON.stringify(reviewed.context.chat));
+    reviewed.events.get('chatChanged')();
+    await until(()=>notificationCalls().length===6,'inSTead saved revision did not notify');
+    assert.equal(completed.at(-1).source,'instead');
+    reviewed.events.get('chatChanged')();
+    await Promise.all([...requests]);
+    assert.equal(notificationCalls().length,6);
+
+    // Cancellation, unrelated chats, and normal generation do not retain the
+    // quiet fallback. A new normal answer continues to use server HTTP completion.
+    for (const reset of ['stopped','chatChanged','normal']) {
+        reviewed.events.get('started')('quiet',{},false);
+        if (reset==='normal') reviewed.events.get('started')('normal',{},false);
+        else {
+            if (reset==='chatChanged') reviewed.context.chatId='chat-b';
+            reviewed.events.get(reset)();
+        }
+        reviewed.context.chat.push({mes:'not a completion',extra:{hundredlog:true,gen_id:Math.random()}});
+        reviewed.events.get('rendered')(reviewed.context.chat.length-1);
+    }
+    await Promise.all([...requests]);
+    assert.equal(notificationCalls().length,6);
+
+    // Final publication still respects foreground and disabled preferences.
+    for (const enabled of [true,false]) {
+        reviewed.context.extensionSettings.response_notifier.enabled=enabled;
+        reviewed.context.extensionSettings.response_notifier.backgroundOnly=true;
+        reviewed.events.get('started')('quiet',{},false);
+        reviewed.context.chat.push({mes:'published',extra:{hundredlog:true,gen_id:Math.random()}});
+        reviewed.events.get('rendered')(reviewed.context.chat.length-1);
+        const reason=enabled?'foreground':'disabled';
+        await until(async()=>(await status('reviewed')).lastGeneration?.reason===reason,`published ${reason} preference ignored`);
+    }
+    assert.equal(notificationCalls().length,6);
+    const invalid=await fetch(`${baseUrl}/api/plugins/silly-pop/completed`,{method:'POST',body:JSON.stringify({source:'unknown',silly_pop:marker})});
+    assert.equal(invalid.status,400); await invalid.json();
+    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, quiet, errors, 100LOG final publication, inSTead reload, cancellation, historical swipes).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();
     await Promise.allSettled([...requests]);
