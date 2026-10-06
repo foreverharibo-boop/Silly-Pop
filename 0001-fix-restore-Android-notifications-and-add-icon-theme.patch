@@ -1,0 +1,1063 @@
+From b4003ca40f9408bd955fc64be8c5671768c562f2 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 6 Oct 2026 18:14:56 +0200
+Subject: [PATCH] fix: restore Android notifications and add icon themes
+
+---
+ .github/workflows/build-android.yml           |  6 +-
+ README.md                                     | 11 ++-
+ android-app/README.md                         |  2 +
+ android-app/app/build.gradle                  |  4 +-
+ android-app/app/src/main/AndroidManifest.xml  | 32 +++++++--
+ .../foreverharibo/sillypop/MainActivity.java  | 67 +++++++++++++++++--
+ .../sillypop/NotificationHelper.java          | 31 ++++++++-
+ .../sillypop/SillyPopReceiver.java            | 15 ++++-
+ .../res/drawable/bg_icon_choice_black.xml     | 15 +++++
+ .../res/drawable/bg_icon_choice_white.xml     | 17 +++++
+ .../src/main/res/drawable/bg_logo_black.xml   |  5 ++
+ .../src/main/res/drawable/bg_logo_white.xml   |  6 ++
+ .../src/main/res/drawable/ic_notification.xml | 12 +++-
+ .../main/res/drawable/ic_st_modular_black.xml | 16 +++++
+ .../main/res/drawable/ic_st_modular_white.xml | 16 +++++
+ .../app/src/main/res/layout/activity_main.xml | 67 ++++++++++++++++++-
+ .../main/res/layout/notification_compact.xml  |  8 ++-
+ .../main/res/layout/notification_expanded.xml |  8 ++-
+ .../mipmap-anydpi-v26/ic_launcher_black.xml   |  5 ++
+ .../ic_launcher_black_round.xml               |  5 ++
+ .../mipmap-anydpi-v26/ic_launcher_white.xml   |  5 ++
+ .../ic_launcher_white_round.xml               |  5 ++
+ .../app/src/main/res/values/colors.xml        |  3 +
+ .../app/src/main/res/values/strings.xml       |  8 ++-
+ index.js                                      | 21 ++++--
+ manifest.json                                 |  2 +-
+ package.json                                  |  2 +-
+ server-plugin/index.cjs                       | 63 ++++++++++++-----
+ server-plugin/index.test.cjs                  |  1 +
+ 29 files changed, 401 insertions(+), 57 deletions(-)
+ create mode 100644 android-app/app/src/main/res/drawable/bg_icon_choice_black.xml
+ create mode 100644 android-app/app/src/main/res/drawable/bg_icon_choice_white.xml
+ create mode 100644 android-app/app/src/main/res/drawable/bg_logo_black.xml
+ create mode 100644 android-app/app/src/main/res/drawable/bg_logo_white.xml
+ create mode 100644 android-app/app/src/main/res/drawable/ic_st_modular_black.xml
+ create mode 100644 android-app/app/src/main/res/drawable/ic_st_modular_white.xml
+ create mode 100644 android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black.xml
+ create mode 100644 android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black_round.xml
+ create mode 100644 android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white.xml
+ create mode 100644 android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white_round.xml
+
+diff --git a/.github/workflows/build-android.yml b/.github/workflows/build-android.yml
+index 3e6d3c5..64bb858 100644
+--- a/.github/workflows/build-android.yml
++++ b/.github/workflows/build-android.yml
+@@ -42,12 +42,12 @@ jobs:
+         run: gradle --no-daemon :app:assembleDebug
+ 
+       - name: Rename APK
+-        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.1.0-test.apk
++        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.2.0-test.apk
+ 
+       - name: Upload APK
+         uses: actions/upload-artifact@v4
+         with:
+-          name: Silly-Pop-v0.1.0-test
+-          path: Silly-Pop-v0.1.0-test.apk
++          name: Silly-Pop-v0.2.0-test
++          path: Silly-Pop-v0.2.0-test.apk
+           if-no-files-found: error
+           retention-days: 30
+diff --git a/README.md b/README.md
+index d447b79..b58892d 100644
+--- a/README.md
++++ b/README.md
+@@ -22,6 +22,7 @@ SillyTavern에서 AI 답변 생성이 완료되면 시스템 알림으로 알려
+ - 삼성 인터넷에서 답변 생성 중 다른 앱으로 이동했다가 돌아오는 경우 감지 보강
+ - 브라우저 알림을 눌렀을 때 기존 SillyTavern 화면을 새로고침하지 않고 그대로 열기
+ - **Silly-Pop 안드로이드 앱**: 삼성 인터넷이 백그라운드에서 얼어도 답변 완료 알림 전송
++- 블랙/화이트 앱 아이콘 선택
+ - 서버 연결 상태 표시 및 서버 테스트 알림
+ - 동일 저장소 URL로 웹 확장과 서버 플러그인 설치
+ 
+@@ -42,7 +43,7 @@ SillyTavern에서 AI 답변 생성이 완료되면 시스템 알림으로 알려
+ 
+ ### 1. Silly-Pop APK 설치
+ 
+-1. GitHub Actions에서 생성된 `Silly-Pop-v0.1.0-test.apk`를 설치합니다.
++1. GitHub Actions에서 생성된 `Silly-Pop-v0.2.0-test.apk`를 설치합니다.
+ 2. 앱을 열고 `알림 권한 허용`을 누릅니다.
+ 3. 앱의 `테스트 알림 보내기`로 알림 표시를 확인합니다.
+ 
+@@ -70,6 +71,7 @@ SillyTavern을 완전히 재시작한 뒤 Silly-Pop 설정을 열어 `Silly-Pop
+ - 실리팝 웹 확장이 실제 메인 답변 요청에만 표시를 붙입니다.
+ - 동반 플러그인이 해당 응답 스트림이 끝나는 순간을 Termux 서버에서 감지합니다.
+ - 서버가 안드로이드의 명시적 브로드캐스트로 Silly-Pop 앱만 호출합니다.
++- 앱 수신기가 실제로 응답했는지 확인해 연결 성공과 전송 실패를 구분합니다.
+ - `다른 앱을 볼 때만`, 소리, 진동 설정도 서버 알림에 반영됩니다.
+ - 숨은 생성, 확장 내부 생성, 첫 인사에는 서버 알림을 보내지 않습니다.
+ - 서버 알림을 누르면 SillyTavern 주소를 엽니다. 안드로이드와 브라우저 상태에 따라 기존 화면을 앞으로 가져오거나 주소를 다시 열 수 있습니다.
+@@ -77,6 +79,13 @@ SillyTavern을 완전히 재시작한 뒤 Silly-Pop 설정을 열어 `Silly-Pop
+ 
+ > Silly-Pop 알림 앱이 연결된 동안에는 중복 방지를 위해 브라우저 알림 대신 앱 알림이 우선 사용됩니다.
+ 
++### 앱은 연결됐는데 알림이 오지 않을 때
++
++1. Silly-Pop 앱을 열어 `테스트 알림 보내기`가 작동하는지 확인합니다.
++2. SillyTavern의 Silly-Pop 설정에서 `연결 확인` 후 `테스트 알림 보내기`를 누릅니다.
++3. 실패하면 표시되는 문구를 확인합니다. v1.3.1부터는 앱 미수신과 알림 권한 차단을 성공으로 처리하지 않습니다.
++4. 앱을 업데이트한 뒤에는 SillyTavern 서버도 완전히 재시작해야 새 서버 플러그인이 로드됩니다.
++
+ ## Doesn't work?
+ 
+ Okay, maybe it wasn't that simple.
+diff --git a/android-app/README.md b/android-app/README.md
+index b3c68f2..6d42bcb 100644
+--- a/android-app/README.md
++++ b/android-app/README.md
+@@ -2,6 +2,8 @@
+ 
+ Silly-Pop의 안드로이드 알림 수신 앱입니다. SillyTavern 서버 플러그인이 명시적 안드로이드 브로드캐스트를 보내면 앱이 시스템 알림을 표시합니다.
+ 
++v0.2.0에서는 모듈형 ST 로고와 블랙/화이트 런처 아이콘 선택 기능을 제공하며, 서버의 무음 연결 확인 요청에 실제 수신 결과를 반환합니다.
++
+ ## 권한
+ 
+ 앱은 `POST_NOTIFICATIONS` 알림 권한만 선언합니다.
+diff --git a/android-app/app/build.gradle b/android-app/app/build.gradle
+index 7f4cfec..0c32c42 100644
+--- a/android-app/app/build.gradle
++++ b/android-app/app/build.gradle
+@@ -10,8 +10,8 @@ android {
+         applicationId 'com.foreverharibo.sillypop'
+         minSdk 26
+         targetSdk 35
+-        versionCode 1
+-        versionName '0.1.0'
++        versionCode 2
++        versionName '0.2.0'
+     }
+ 
+     buildTypes {
+diff --git a/android-app/app/src/main/AndroidManifest.xml b/android-app/app/src/main/AndroidManifest.xml
+index 5180110..5197a06 100644
+--- a/android-app/app/src/main/AndroidManifest.xml
++++ b/android-app/app/src/main/AndroidManifest.xml
+@@ -9,20 +9,43 @@
+ 
+     <application
+         android:allowBackup="false"
+-        android:icon="@mipmap/ic_launcher"
++        android:icon="@mipmap/ic_launcher_black"
+         android:label="@string/app_name"
+-        android:roundIcon="@mipmap/ic_launcher_round"
++        android:roundIcon="@mipmap/ic_launcher_black_round"
+         android:supportsRtl="true"
+         android:theme="@style/Theme.SillyPop">
+ 
+         <activity
+             android:name=".MainActivity"
+-            android:exported="true">
++            android:exported="true" />
++
++        <activity-alias
++            android:name=".BlackIcon"
++            android:enabled="true"
++            android:exported="true"
++            android:icon="@mipmap/ic_launcher_black"
++            android:label="@string/app_name"
++            android:roundIcon="@mipmap/ic_launcher_black_round"
++            android:targetActivity=".MainActivity">
++            <intent-filter>
++                <action android:name="android.intent.action.MAIN" />
++                <category android:name="android.intent.category.LAUNCHER" />
++            </intent-filter>
++        </activity-alias>
++
++        <activity-alias
++            android:name=".WhiteIcon"
++            android:enabled="false"
++            android:exported="true"
++            android:icon="@mipmap/ic_launcher_white"
++            android:label="@string/app_name"
++            android:roundIcon="@mipmap/ic_launcher_white_round"
++            android:targetActivity=".MainActivity">
+             <intent-filter>
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.LAUNCHER" />
+             </intent-filter>
+-        </activity>
++        </activity-alias>
+ 
+         <receiver
+             android:name=".SillyPopReceiver"
+@@ -30,6 +53,7 @@
+             android:exported="true">
+             <intent-filter>
+                 <action android:name="com.foreverharibo.sillypop.NOTIFY" />
++                <action android:name="com.foreverharibo.sillypop.PING" />
+             </intent-filter>
+         </receiver>
+     </application>
+diff --git a/android-app/app/src/main/java/com/foreverharibo/sillypop/MainActivity.java b/android-app/app/src/main/java/com/foreverharibo/sillypop/MainActivity.java
+index 43f5cec..8970bee 100644
+--- a/android-app/app/src/main/java/com/foreverharibo/sillypop/MainActivity.java
++++ b/android-app/app/src/main/java/com/foreverharibo/sillypop/MainActivity.java
+@@ -2,19 +2,30 @@ package com.foreverharibo.sillypop;
+ 
+ import android.Manifest;
+ import android.app.Activity;
++import android.app.NotificationManager;
++import android.content.ComponentName;
+ import android.content.Intent;
+ import android.content.pm.PackageManager;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.provider.Settings;
+ import android.widget.Button;
++import android.widget.FrameLayout;
++import android.widget.ImageView;
+ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ public final class MainActivity extends Activity {
+     private static final int NOTIFICATION_PERMISSION_REQUEST = 1001;
++    private static final String KEY_ICON_STYLE = "launcher_icon_style";
++    private static final String ICON_BLACK = "black";
++    private static final String ICON_WHITE = "white";
+     private TextView permissionStatus;
+     private Button permissionButton;
++    private FrameLayout logoFrame;
++    private ImageView logoImage;
++    private Button blackIconButton;
++    private Button whiteIconButton;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -24,12 +35,19 @@ public final class MainActivity extends Activity {
+ 
+         permissionStatus = findViewById(R.id.permissionStatus);
+         permissionButton = findViewById(R.id.permissionButton);
++        logoFrame = findViewById(R.id.logoFrame);
++        logoImage = findViewById(R.id.logoImage);
++        blackIconButton = findViewById(R.id.blackIconButton);
++        whiteIconButton = findViewById(R.id.whiteIconButton);
+         Button testButton = findViewById(R.id.testButton);
+         Button openSillyButton = findViewById(R.id.openSillyButton);
+ 
+         permissionButton.setOnClickListener(view -> requestNotificationPermission());
+         testButton.setOnClickListener(view -> sendTestNotification());
+         openSillyButton.setOnClickListener(view -> openSillyTavern());
++        blackIconButton.setOnClickListener(view -> setIconStyle(ICON_BLACK, true));
++        whiteIconButton.setOnClickListener(view -> setIconStyle(ICON_WHITE, true));
++        setIconStyle(getSavedIconStyle(), false);
+         updatePermissionUi();
+     }
+ 
+@@ -39,13 +57,18 @@ public final class MainActivity extends Activity {
+         updatePermissionUi();
+     }
+ 
+-    private boolean hasNotificationPermission() {
++    private boolean hasRuntimeNotificationPermission() {
+         return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+             || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+     }
+ 
++    private boolean hasNotificationPermission() {
++        NotificationManager manager = getSystemService(NotificationManager.class);
++        return hasRuntimeNotificationPermission() && manager != null && manager.areNotificationsEnabled();
++    }
++
+     private void requestNotificationPermission() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission()) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasRuntimeNotificationPermission()) {
+             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFICATION_PERMISSION_REQUEST);
+             return;
+         }
+@@ -64,7 +87,7 @@ public final class MainActivity extends Activity {
+ 
+         String url = getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
+             .getString(NotificationHelper.KEY_LAST_URL, NotificationHelper.DEFAULT_SILLY_URL);
+-        NotificationHelper.show(
++        boolean shown = NotificationHelper.show(
+             this,
+             "Silly-Pop 테스트",
+             "톡! 알림이 예쁘게 잘 도착했어요 ✨",
+@@ -72,7 +95,7 @@ public final class MainActivity extends Activity {
+             true,
+             true
+         );
+-        Toast.makeText(this, "테스트 알림을 보냈어요!", Toast.LENGTH_SHORT).show();
++        Toast.makeText(this, shown ? "테스트 알림을 보냈어요!" : "알림 설정에서 Silly-Pop 알림을 허용해 주세요.", Toast.LENGTH_SHORT).show();
+     }
+ 
+     private void openSillyTavern() {
+@@ -93,6 +116,42 @@ public final class MainActivity extends Activity {
+         permissionButton.setText(allowed ? "설정 열기" : getString(R.string.permission_button));
+     }
+ 
++    private String getSavedIconStyle() {
++        return getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
++            .getString(KEY_ICON_STYLE, ICON_BLACK);
++    }
++
++    private void setIconStyle(String style, boolean announce) {
++        boolean white = ICON_WHITE.equals(style);
++        getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
++            .edit()
++            .putString(KEY_ICON_STYLE, white ? ICON_WHITE : ICON_BLACK)
++            .apply();
++
++        logoFrame.setBackgroundResource(white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black);
++        logoImage.setImageResource(white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white);
++        blackIconButton.setText(white ? R.string.icon_black : R.string.icon_black_selected);
++        whiteIconButton.setText(white ? R.string.icon_white_selected : R.string.icon_white);
++
++        PackageManager packageManager = getPackageManager();
++        ComponentName blackAlias = new ComponentName(this, getPackageName() + ".BlackIcon");
++        ComponentName whiteAlias = new ComponentName(this, getPackageName() + ".WhiteIcon");
++        packageManager.setComponentEnabledSetting(
++            blackAlias,
++            white ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED : PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
++            PackageManager.DONT_KILL_APP
++        );
++        packageManager.setComponentEnabledSetting(
++            whiteAlias,
++            white ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
++            PackageManager.DONT_KILL_APP
++        );
++
++        if (announce) {
++            Toast.makeText(this, white ? "화이트 아이콘으로 바꿨어요." : "블랙 아이콘으로 바꿨어요.", Toast.LENGTH_SHORT).show();
++        }
++    }
++
+     @Override
+     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+diff --git a/android-app/app/src/main/java/com/foreverharibo/sillypop/NotificationHelper.java b/android-app/app/src/main/java/com/foreverharibo/sillypop/NotificationHelper.java
+index 237d72d..4b8e847 100644
+--- a/android-app/app/src/main/java/com/foreverharibo/sillypop/NotificationHelper.java
++++ b/android-app/app/src/main/java/com/foreverharibo/sillypop/NotificationHelper.java
+@@ -63,10 +63,14 @@ public final class NotificationHelper {
+         return channel;
+     }
+ 
+-    public static void show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
++    public static boolean show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
+         createChannels(context);
+         NotificationManager manager = context.getSystemService(NotificationManager.class);
+-        if (manager == null) return;
++        if (manager == null || !manager.areNotificationsEnabled()) return false;
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
++            && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
++            return false;
++        }
+ 
+         String channelId = channelId(sound, vibrate);
+         PendingIntent openIntent = PendingIntent.getActivity(
+@@ -79,10 +83,12 @@ public final class NotificationHelper {
+         RemoteViews compact = new RemoteViews(context.getPackageName(), R.layout.notification_compact);
+         compact.setTextViewText(R.id.notificationTitle, title);
+         compact.setTextViewText(R.id.notificationBody, body);
++        applyLogoStyle(context, compact);
+ 
+         RemoteViews expanded = new RemoteViews(context.getPackageName(), R.layout.notification_expanded);
+         expanded.setTextViewText(R.id.notificationTitle, title);
+         expanded.setTextViewText(R.id.notificationBody, body);
++        applyLogoStyle(context, expanded);
+ 
+         Notification notification = new Notification.Builder(context, channelId)
+             .setSmallIcon(R.drawable.ic_notification)
+@@ -97,7 +103,26 @@ public final class NotificationHelper {
+             .setShowWhen(true)
+             .build();
+ 
+-        manager.notify(NEXT_ID.incrementAndGet(), notification);
++        try {
++            manager.notify(NEXT_ID.incrementAndGet(), notification);
++            return true;
++        } catch (SecurityException error) {
++            return false;
++        }
++    }
++
++    private static void applyLogoStyle(Context context, RemoteViews views) {
++        boolean white = "white".equals(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
++            .getString("launcher_icon_style", "black"));
++        views.setInt(
++            R.id.notificationLogoFrame,
++            "setBackgroundResource",
++            white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black
++        );
++        views.setImageViewResource(
++            R.id.notificationLogo,
++            white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white
++        );
+     }
+ 
+     public static Intent createOpenIntent(Context context, String url) {
+diff --git a/android-app/app/src/main/java/com/foreverharibo/sillypop/SillyPopReceiver.java b/android-app/app/src/main/java/com/foreverharibo/sillypop/SillyPopReceiver.java
+index b875df8..3682a8b 100644
+--- a/android-app/app/src/main/java/com/foreverharibo/sillypop/SillyPopReceiver.java
++++ b/android-app/app/src/main/java/com/foreverharibo/sillypop/SillyPopReceiver.java
+@@ -7,10 +7,17 @@ import android.net.Uri;
+ 
+ public final class SillyPopReceiver extends BroadcastReceiver {
+     public static final String ACTION_NOTIFY = "com.foreverharibo.sillypop.NOTIFY";
++    public static final String ACTION_PING = "com.foreverharibo.sillypop.PING";
+ 
+     @Override
+     public void onReceive(Context context, Intent intent) {
+-        if (intent == null || !ACTION_NOTIFY.equals(intent.getAction())) return;
++        if (intent == null) return;
++        if (ACTION_PING.equals(intent.getAction())) {
++            setResultCode(ActivityResultCodes.OK);
++            setResultData("silly-pop-ready");
++            return;
++        }
++        if (!ACTION_NOTIFY.equals(intent.getAction())) return;
+ 
+         String title = clean(intent.getStringExtra("title"), 120);
+         String body = clean(intent.getStringExtra("body"), 280);
+@@ -27,8 +34,9 @@ public final class SillyPopReceiver extends BroadcastReceiver {
+             .putString(NotificationHelper.KEY_LAST_URL, url)
+             .apply();
+ 
+-        NotificationHelper.show(context, title, body, url, sound, vibrate);
+-        setResultCode(ActivityResultCodes.OK);
++        boolean shown = NotificationHelper.show(context, title, body, url, sound, vibrate);
++        setResultCode(shown ? ActivityResultCodes.OK : ActivityResultCodes.CANCELED);
++        setResultData(shown ? "ok" : "notification-permission-disabled");
+     }
+ 
+     private static String clean(String value, int maxLength) {
+@@ -53,5 +61,6 @@ public final class SillyPopReceiver extends BroadcastReceiver {
+ 
+     private static final class ActivityResultCodes {
+         private static final int OK = -1;
++        private static final int CANCELED = 0;
+     }
+ }
+diff --git a/android-app/app/src/main/res/drawable/bg_icon_choice_black.xml b/android-app/app/src/main/res/drawable/bg_icon_choice_black.xml
+new file mode 100644
+index 0000000..0dfe37d
+--- /dev/null
++++ b/android-app/app/src/main/res/drawable/bg_icon_choice_black.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<selector xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:state_pressed="true">
++        <shape android:shape="rectangle">
++            <solid android:color="#FF2A2A2A" />
++            <corners android:radius="16dp" />
++        </shape>
++    </item>
++    <item>
++        <shape android:shape="rectangle">
++            <solid android:color="@color/icon_black" />
++            <corners android:radius="16dp" />
++        </shape>
++    </item>
++</selector>
+diff --git a/android-app/app/src/main/res/drawable/bg_icon_choice_white.xml b/android-app/app/src/main/res/drawable/bg_icon_choice_white.xml
+new file mode 100644
+index 0000000..6bdac21
+--- /dev/null
++++ b/android-app/app/src/main/res/drawable/bg_icon_choice_white.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<selector xmlns:android="http://schemas.android.com/apk/res/android">
++    <item android:state_pressed="true">
++        <shape android:shape="rectangle">
++            <solid android:color="#FFF0F0EE" />
++            <corners android:radius="16dp" />
++            <stroke android:width="1dp" android:color="#FFAAAAA5" />
++        </shape>
++    </item>
++    <item>
++        <shape android:shape="rectangle">
++            <solid android:color="@color/icon_white" />
++            <corners android:radius="16dp" />
++            <stroke android:width="1dp" android:color="@color/icon_border" />
++        </shape>
++    </item>
++</selector>
+diff --git a/android-app/app/src/main/res/drawable/bg_logo_black.xml b/android-app/app/src/main/res/drawable/bg_logo_black.xml
+new file mode 100644
+index 0000000..b1ccc7e
+--- /dev/null
++++ b/android-app/app/src/main/res/drawable/bg_logo_black.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
++    <solid android:color="@color/icon_black" />
++    <corners android:radius="24dp" />
++</shape>
+diff --git a/android-app/app/src/main/res/drawable/bg_logo_white.xml b/android-app/app/src/main/res/drawable/bg_logo_white.xml
+new file mode 100644
+index 0000000..9971bec
+--- /dev/null
++++ b/android-app/app/src/main/res/drawable/bg_logo_white.xml
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
++    <solid android:color="@color/icon_white" />
++    <corners android:radius="24dp" />
++    <stroke android:width="1dp" android:color="@color/icon_border" />
++</shape>
+diff --git a/android-app/app/src/main/res/drawable/ic_notification.xml b/android-app/app/src/main/res/drawable/ic_notification.xml
+index 016cf3b..5ec4410 100644
+--- a/android-app/app/src/main/res/drawable/ic_notification.xml
++++ b/android-app/app/src/main/res/drawable/ic_notification.xml
+@@ -2,9 +2,15 @@
+ <vector xmlns:android="http://schemas.android.com/apk/res/android"
+     android:width="24dp"
+     android:height="24dp"
+-    android:viewportWidth="24"
+-    android:viewportHeight="24">
++    android:viewportWidth="108"
++    android:viewportHeight="108">
+     <path
+         android:fillColor="#FFFFFFFF"
+-        android:pathData="M12,22c1.1,0 1.99,-0.9 1.99,-2h-3.98c0,1.1 0.89,2 1.99,2zM18,16v-5c0,-3.07 -1.63,-5.64 -4.5,-6.32V4a1.5,1.5 0,0 0,-3 0v0.68C7.64,5.36 6,7.92 6,11v5l-2,2v1h16v-1z" />
++        android:pathData="M36,25 L80,25 L75,39 Q74,42 69,42 L58,42 L58,59 L51,54 L51,42 L38,42 L29,35 Z" />
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:pathData="M29,39 L74,72 L74,86 L29,53 Z" />
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:pathData="M31,64 L43,64 L43,76 L61,76 L70,83 L62,90 L36,90 C27,90 21,84 21,75 C21,70 24,67 31,63 Z" />
+ </vector>
+diff --git a/android-app/app/src/main/res/drawable/ic_st_modular_black.xml b/android-app/app/src/main/res/drawable/ic_st_modular_black.xml
+new file mode 100644
+index 0000000..06a2577
+--- /dev/null
++++ b/android-app/app/src/main/res/drawable/ic_st_modular_black.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="108dp"
++    android:height="108dp"
++    android:viewportWidth="108"
++    android:viewportHeight="108">
++    <path
++        android:fillColor="#FF080808"
++        android:pathData="M36,25 L80,25 L75,39 Q74,42 69,42 L58,42 L58,59 L51,54 L51,42 L38,42 L29,35 Z" />
++    <path
++        android:fillColor="#FF080808"
++        android:pathData="M29,39 L74,72 L74,86 L29,53 Z" />
++    <path
++        android:fillColor="#FF080808"
++        android:pathData="M31,64 L43,64 L43,76 L61,76 L70,83 L62,90 L36,90 C27,90 21,84 21,75 C21,70 24,67 31,63 Z" />
++</vector>
+diff --git a/android-app/app/src/main/res/drawable/ic_st_modular_white.xml b/android-app/app/src/main/res/drawable/ic_st_modular_white.xml
+new file mode 100644
+index 0000000..7ac0386
+--- /dev/null
++++ b/android-app/app/src/main/res/drawable/ic_st_modular_white.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="108dp"
++    android:height="108dp"
++    android:viewportWidth="108"
++    android:viewportHeight="108">
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:pathData="M36,25 L80,25 L75,39 Q74,42 69,42 L58,42 L58,59 L51,54 L51,42 L38,42 L29,35 Z" />
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:pathData="M29,39 L74,72 L74,86 L29,53 Z" />
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:pathData="M31,64 L43,64 L43,76 L61,76 L70,83 L62,90 L36,90 C27,90 21,84 21,75 C21,70 24,67 31,63 Z" />
++</vector>
+diff --git a/android-app/app/src/main/res/layout/activity_main.xml b/android-app/app/src/main/res/layout/activity_main.xml
+index 2a2fa99..0df8da6 100644
+--- a/android-app/app/src/main/res/layout/activity_main.xml
++++ b/android-app/app/src/main/res/layout/activity_main.xml
+@@ -18,17 +18,19 @@
+         android:paddingBottom="28dp">
+ 
+         <FrameLayout
++            android:id="@+id/logoFrame"
+             android:layout_width="92dp"
+             android:layout_height="92dp"
+-            android:background="@drawable/bg_logo"
++            android:background="@drawable/bg_logo_black"
+             android:elevation="10dp"
+-            android:padding="20dp">
++            android:padding="16dp">
+ 
+             <ImageView
++                android:id="@+id/logoImage"
+                 android:layout_width="match_parent"
+                 android:layout_height="match_parent"
+                 android:contentDescription="@string/app_name"
+-                android:src="@drawable/ic_bell_heart" />
++                android:src="@drawable/ic_st_modular_white" />
+         </FrameLayout>
+ 
+         <TextView
+@@ -137,6 +139,65 @@
+                 android:textSize="13sp" />
+         </LinearLayout>
+ 
++        <LinearLayout
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="14dp"
++            android:background="@drawable/bg_card"
++            android:elevation="3dp"
++            android:orientation="vertical"
++            android:padding="20dp">
++
++            <TextView
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:fontFamily="sans-serif-bold"
++                android:text="@string/icon_style_title"
++                android:textColor="@color/ink"
++                android:textSize="16sp" />
++
++            <TextView
++                android:layout_width="match_parent"
++                android:layout_height="wrap_content"
++                android:layout_marginTop="4dp"
++                android:text="@string/icon_style_description"
++                android:textColor="@color/ink_soft"
++                android:textSize="13sp" />
++
++            <LinearLayout
++                android:layout_width="match_parent"
++                android:layout_height="wrap_content"
++                android:layout_marginTop="14dp"
++                android:orientation="horizontal">
++
++                <Button
++                    android:id="@+id/blackIconButton"
++                    android:layout_width="0dp"
++                    android:layout_height="50dp"
++                    android:layout_marginRight="6dp"
++                    android:layout_weight="1"
++                    android:background="@drawable/bg_icon_choice_black"
++                    android:fontFamily="sans-serif-medium"
++                    android:text="@string/icon_black_selected"
++                    android:textAllCaps="false"
++                    android:textColor="@color/icon_white"
++                    android:textSize="14sp" />
++
++                <Button
++                    android:id="@+id/whiteIconButton"
++                    android:layout_width="0dp"
++                    android:layout_height="50dp"
++                    android:layout_marginLeft="6dp"
++                    android:layout_weight="1"
++                    android:background="@drawable/bg_icon_choice_white"
++                    android:fontFamily="sans-serif-medium"
++                    android:text="@string/icon_white"
++                    android:textAllCaps="false"
++                    android:textColor="@color/icon_black"
++                    android:textSize="14sp" />
++            </LinearLayout>
++        </LinearLayout>
++
+         <Button
+             android:id="@+id/testButton"
+             android:layout_width="match_parent"
+diff --git a/android-app/app/src/main/res/layout/notification_compact.xml b/android-app/app/src/main/res/layout/notification_compact.xml
+index 114ac28..bbb3e5e 100644
+--- a/android-app/app/src/main/res/layout/notification_compact.xml
++++ b/android-app/app/src/main/res/layout/notification_compact.xml
+@@ -8,15 +8,17 @@
+     android:padding="12dp">
+ 
+     <FrameLayout
++        android:id="@+id/notificationLogoFrame"
+         android:layout_width="42dp"
+         android:layout_height="42dp"
+-        android:background="@drawable/bg_logo"
+-        android:padding="9dp">
++        android:background="@drawable/bg_logo_black"
++        android:padding="6dp">
+ 
+         <ImageView
++            android:id="@+id/notificationLogo"
+             android:layout_width="match_parent"
+             android:layout_height="match_parent"
+-            android:src="@drawable/ic_bell_heart" />
++            android:src="@drawable/ic_st_modular_white" />
+     </FrameLayout>
+ 
+     <LinearLayout
+diff --git a/android-app/app/src/main/res/layout/notification_expanded.xml b/android-app/app/src/main/res/layout/notification_expanded.xml
+index c669b30..aec6ade 100644
+--- a/android-app/app/src/main/res/layout/notification_expanded.xml
++++ b/android-app/app/src/main/res/layout/notification_expanded.xml
+@@ -13,15 +13,17 @@
+         android:orientation="horizontal">
+ 
+         <FrameLayout
++            android:id="@+id/notificationLogoFrame"
+             android:layout_width="44dp"
+             android:layout_height="44dp"
+-            android:background="@drawable/bg_logo"
+-            android:padding="9dp">
++            android:background="@drawable/bg_logo_black"
++            android:padding="6dp">
+ 
+             <ImageView
++                android:id="@+id/notificationLogo"
+                 android:layout_width="match_parent"
+                 android:layout_height="match_parent"
+-                android:src="@drawable/ic_bell_heart" />
++                android:src="@drawable/ic_st_modular_white" />
+         </FrameLayout>
+ 
+         <LinearLayout
+diff --git a/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black.xml b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black.xml
+new file mode 100644
+index 0000000..4789887
+--- /dev/null
++++ b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@color/icon_black" />
++    <foreground android:drawable="@drawable/ic_st_modular_white" />
++</adaptive-icon>
+diff --git a/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black_round.xml b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black_round.xml
+new file mode 100644
+index 0000000..4789887
+--- /dev/null
++++ b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_black_round.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@color/icon_black" />
++    <foreground android:drawable="@drawable/ic_st_modular_white" />
++</adaptive-icon>
+diff --git a/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white.xml b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white.xml
+new file mode 100644
+index 0000000..9989fbc
+--- /dev/null
++++ b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@color/icon_white" />
++    <foreground android:drawable="@drawable/ic_st_modular_black" />
++</adaptive-icon>
+diff --git a/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white_round.xml b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white_round.xml
+new file mode 100644
+index 0000000..9989fbc
+--- /dev/null
++++ b/android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white_round.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
++    <background android:drawable="@color/icon_white" />
++    <foreground android:drawable="@drawable/ic_st_modular_black" />
++</adaptive-icon>
+diff --git a/android-app/app/src/main/res/values/colors.xml b/android-app/app/src/main/res/values/colors.xml
+index e52b466..03da80b 100644
+--- a/android-app/app/src/main/res/values/colors.xml
++++ b/android-app/app/src/main/res/values/colors.xml
+@@ -10,4 +10,7 @@
+     <color name="ink_soft">#746C85</color>
+     <color name="white">#FFFFFF</color>
+     <color name="green">#4BBF88</color>
++    <color name="icon_black">#080808</color>
++    <color name="icon_white">#FFFFFF</color>
++    <color name="icon_border">#D8D8D4</color>
+ </resources>
+diff --git a/android-app/app/src/main/res/values/strings.xml b/android-app/app/src/main/res/values/strings.xml
+index caee348..c5ede5e 100644
+--- a/android-app/app/src/main/res/values/strings.xml
++++ b/android-app/app/src/main/res/values/strings.xml
+@@ -11,5 +11,11 @@
+     <string name="open_silly_button">실리 열기</string>
+     <string name="privacy_title">안심하고 사용하세요</string>
+     <string name="privacy_description">외부 서버 전송 없음 · 파일/연락처/문자 권한 없음 · 백그라운드 상시 실행 없음</string>
+-    <string name="footer">Silly-Pop v0.1.0 · by 담은</string>
++    <string name="icon_style_title">앱 아이콘 색상</string>
++    <string name="icon_style_description">홈 화면에 표시할 아이콘을 선택하세요.</string>
++    <string name="icon_black">블랙</string>
++    <string name="icon_black_selected">✓  블랙</string>
++    <string name="icon_white">화이트</string>
++    <string name="icon_white_selected">✓  화이트</string>
++    <string name="footer">Silly-Pop v0.2.0 · by 담은</string>
+ </resources>
+diff --git a/index.js b/index.js
+index 662e1cc..2848733 100644
+--- a/index.js
++++ b/index.js
+@@ -29,6 +29,7 @@ let backgroundedDuringGeneration = false;
+ let activeGenerationType = '';
+ let companionState = { installed: false, ready: false, version: '', detail: '확인 중이에요.' };
+ const recentMessageKeys = new Map();
++const urgentStateImages = new Set();
+ const clientId = getClientId();
+ 
+ function getClientId() {
+@@ -254,6 +255,7 @@ function makeCompanionMarker(type = activeGenerationType) {
+         sound: Boolean(settings.sound),
+         vibrate: Boolean(settings.vibrate),
+         visibleAtRequest: isPageForeground(),
++        backgroundedDuringGeneration,
+         url: globalThis.location.href,
+         characterName: String(context?.name2 || ''),
+     };
+@@ -277,6 +279,7 @@ function handleGenerationStarted(type, _params, dryRun = false) {
+ function handleGenerationEnded() {
+     generationActive = false;
+     activeGenerationType = '';
++    void sendCompanionState();
+ }
+ 
+ function handlePageActivityChange() {
+@@ -374,19 +377,29 @@ async function checkCompanion() {
+     return companionState;
+ }
+ 
+-async function sendCompanionState() {
++async function sendCompanionState(urgent = false) {
+     if (!companionState.installed) return;
+     const params = new URLSearchParams({
+         clientId,
+         visible: isPageForeground() ? '1' : '0',
+         enabled: settings.enabled ? '1' : '0',
+         backgroundOnly: settings.backgroundOnly ? '1' : '0',
++        backgroundedDuringGeneration: backgroundedDuringGeneration ? '1' : '0',
+         sound: settings.sound ? '1' : '0',
+         vibrate: settings.vibrate ? '1' : '0',
+         url: globalThis.location.href,
+         ts: String(Date.now()),
+     });
+ 
++    if (urgent && typeof Image === 'function') {
++        const image = new Image();
++        urgentStateImages.add(image);
++        const cleanup = () => urgentStateImages.delete(image);
++        image.onload = cleanup;
++        image.onerror = cleanup;
++        image.src = `${COMPANION_API}/state?${params}`;
++    }
++
+     try {
+         await fetch(`${COMPANION_API}/state?${params}`, {
+             method: 'GET',
+@@ -433,7 +446,7 @@ function renderSettings() {
+         <div id="st_response_notifier_settings" class="extension_container">
+             <div class="inline-drawer">
+                 <div class="inline-drawer-toggle inline-drawer-header">
+-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.0</small></div>
++                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.1</small></div>
+                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                 </div>
+                 <div class="inline-drawer-content">
+@@ -516,12 +529,12 @@ function initialize() {
+     }
+     document.addEventListener('visibilitychange', () => {
+         handlePageActivityChange();
+-        void sendCompanionState();
++        void sendCompanionState(true);
+         void clearVisibleNotifications();
+     });
+     globalThis.addEventListener('blur', () => {
+         handlePageActivityChange();
+-        void sendCompanionState();
++        void sendCompanionState(true);
+     });
+     globalThis.addEventListener('focus', () => {
+         handlePageActivityChange();
+diff --git a/manifest.json b/manifest.json
+index 3260399..139473a 100644
+--- a/manifest.json
++++ b/manifest.json
+@@ -6,7 +6,7 @@
+     "js": "index.js",
+     "css": "style.css",
+     "author": "Cohee1207, 담은",
+-    "version": "1.3.0",
++    "version": "1.3.1",
+     "homePage": "https://github.com/foreverharibo-boop/Silly-Pop",
+     "auto_update": true
+ }
+diff --git a/package.json b/package.json
+index 83418a5..285c502 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "silly-pop",
+-  "version": "1.3.0",
++  "version": "1.3.1",
+   "private": true,
+   "description": "Silly-Pop browser extension, server bridge, and Android notification companion for SillyTavern",
+   "main": "server-plugin/index.cjs",
+diff --git a/server-plugin/index.cjs b/server-plugin/index.cjs
+index c72810f..e9d3117 100644
+--- a/server-plugin/index.cjs
++++ b/server-plugin/index.cjs
+@@ -9,7 +9,7 @@ const http = require('node:http');
+ const path = require('node:path');
+ const { spawn, spawnSync } = require('node:child_process');
+ 
+-const VERSION = '2.0.0';
++const VERSION = '2.1.0';
+ const PROTOCOL_VERSION = 1;
+ const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
+ const REQUEST_TTL_MS = 10 * 60 * 1000;
+@@ -17,6 +17,7 @@ const NOTIFICATION_TIMEOUT_MS = 5000;
+ const APP_PACKAGE = 'com.foreverharibo.sillypop';
+ const APP_RECEIVER = `${APP_PACKAGE}/.SillyPopReceiver`;
+ const APP_ACTION = `${APP_PACKAGE}.NOTIFY`;
++const APP_PING_ACTION = `${APP_PACKAGE}.PING`;
+ const GENERATION_PATHS = new Set([
+     '/api/backends/chat-completions/generate',
+     '/api/backends/text-completions/generate',
+@@ -29,6 +30,7 @@ const clientStates = new Map();
+ const handledRequests = new Map();
+ const originalEnd = http.ServerResponse.prototype.end;
+ let patched = false;
++let lastCompanionCheck = { checkedAt: 0, installed: false };
+ 
+ function getBridgeCommand() {
+     if (process.env.SILLY_POP_BRIDGE_COMMAND) {
+@@ -54,17 +56,29 @@ function companionAppInstalled() {
+     if (process.env.SILLY_POP_COMPANION_INSTALLED) {
+         return process.env.SILLY_POP_COMPANION_INSTALLED === '1';
+     }
+-    if (process.env.SILLY_POP_BRIDGE_COMMAND) return bridgeCommandExists();
+     if (!bridgeCommandExists()) return false;
+ 
++    const now = Date.now();
++    if (now - lastCompanionCheck.checkedAt < 15000) return lastCompanionCheck.installed;
++
+     try {
+-        const result = spawnSync('/system/bin/cmd', ['package', 'path', APP_PACKAGE], {
++        const result = spawnSync(getBridgeCommand(), [
++            'broadcast',
++            '--receiver-foreground',
++            '--include-stopped-packages',
++            '-n', APP_RECEIVER,
++            '-a', APP_PING_ACTION,
++        ], {
+             encoding: 'utf8',
+-            timeout: 1500,
++            timeout: 2500,
+             windowsHide: true,
+         });
+-        return result.status === 0 && String(result.stdout || '').includes(`package:`);
++        const output = `${result.stdout || ''} ${result.stderr || ''}`;
++        const installed = result.status === 0 && /result=-1\b/.test(output);
++        lastCompanionCheck = { checkedAt: now, installed };
++        return installed;
+     } catch {
++        lastCompanionCheck = { checkedAt: now, installed: false };
+         return false;
+     }
+ }
+@@ -101,8 +115,8 @@ function runNotification({ title, content, sound, vibrate, url }) {
+ 
+         const args = [
+             'broadcast',
+-            '--user', '0',
+             '--receiver-foreground',
++            '--include-stopped-packages',
+             '-n', APP_RECEIVER,
+             '-a', APP_ACTION,
+             '--es', 'title', cleanText(title, 120) || 'Silly-Pop',
+@@ -138,8 +152,13 @@ function runNotification({ title, content, sound, vibrate, url }) {
+             clearTimeout(timer);
+             const output = cleanText(`${stdout} ${stderr}`, 700);
+             const failed = /(?:error|exception|unable|not found)/i.test(output);
+-            if (code === 0 && !failed) resolve();
+-            else reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
++            const received = /result=-1\b/.test(output) || process.env.SILLY_POP_ASSUME_BROADCAST_RESULT === '1';
++            if (code === 0 && !failed && received) resolve();
++            else if (/notification-permission-disabled/i.test(output)) {
++                reject(new Error('Silly-Pop 앱의 알림 권한이 꺼져 있습니다. 앱을 열어 권한을 다시 허용해 주세요.'));
++            } else {
++                reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
++            }
+         });
+     });
+ }
+@@ -163,6 +182,7 @@ function getMarker(request) {
+         sound: booleanValue(marker.sound, true),
+         vibrate: booleanValue(marker.vibrate, true),
+         visibleAtRequest: booleanValue(marker.visibleAtRequest, true),
++        backgroundedDuringGeneration: booleanValue(marker.backgroundedDuringGeneration, false),
+         url: safeUrl(marker.url),
+         characterName: cleanText(marker.characterName || body?.char_name, 80),
+         type: cleanText(marker.type || body?.type, 30).toLowerCase(),
+@@ -184,7 +204,8 @@ function shouldNotify(marker) {
+     const visible = state ? state.visible : marker.visibleAtRequest;
+     const enabled = state ? state.enabled : marker.enabled;
+     const backgroundOnly = state ? state.backgroundOnly : marker.backgroundOnly;
+-    return enabled && (!backgroundOnly || !visible);
++    const backgrounded = state ? state.backgroundedDuringGeneration : marker.backgroundedDuringGeneration;
++    return enabled && (!backgroundOnly || !visible || backgrounded);
+ }
+ 
+ function handleCompletedResponse(response, marker) {
+@@ -255,21 +276,26 @@ async function init(router) {
+ 
+     // GET is intentional: visibility changes may freeze a mobile browser immediately,
+     // and a small keepalive GET is the most reliable way to record the final state.
+-    router.get('/state', (request, response) => {
+-        const clientId = cleanText(request.query.clientId, 100);
++    const updateState = (request, response) => {
++        const input = request.method === 'POST' ? request.body || {} : request.query || {};
++        const clientId = cleanText(input.clientId, 100);
+         if (!clientId) return response.status(400).json({ ok: false, error: 'clientId is required' });
+         clientStates.set(clientId, {
+-            visible: booleanValue(request.query.visible, true),
+-            enabled: booleanValue(request.query.enabled, true),
+-            backgroundOnly: booleanValue(request.query.backgroundOnly, true),
+-            sound: booleanValue(request.query.sound, true),
+-            vibrate: booleanValue(request.query.vibrate, true),
+-            url: safeUrl(request.query.url),
++            visible: booleanValue(input.visible, true),
++            enabled: booleanValue(input.enabled, true),
++            backgroundOnly: booleanValue(input.backgroundOnly, true),
++            backgroundedDuringGeneration: booleanValue(input.backgroundedDuringGeneration, false),
++            sound: booleanValue(input.sound, true),
++            vibrate: booleanValue(input.vibrate, true),
++            url: safeUrl(input.url),
+             updatedAt: Date.now(),
+         });
+         pruneState();
+         return response.json({ ok: true });
+-    });
++    };
++
++    router.get('/state', updateState);
++    router.post('/state', updateState);
+ 
+     router.post('/test', async (request, response) => {
+         try {
+@@ -294,6 +320,7 @@ async function exit() {
+     restoreResponseEnd();
+     clientStates.clear();
+     handledRequests.clear();
++    lastCompanionCheck = { checkedAt: 0, installed: false };
+ }
+ 
+ module.exports = { info, init, exit };
+diff --git a/server-plugin/index.test.cjs b/server-plugin/index.test.cjs
+index 8a74bf5..13a40d2 100644
+--- a/server-plugin/index.test.cjs
++++ b/server-plugin/index.test.cjs
+@@ -3,6 +3,7 @@ const http = require('node:http');
+ 
+ process.env.SILLY_POP_BRIDGE_COMMAND = '/bin/true';
+ process.env.SILLY_POP_COMPANION_INSTALLED = '1';
++process.env.SILLY_POP_ASSUME_BROADCAST_RESULT = '1';
+ 
+ const plugin = require('./index.cjs');
+ 
+-- 
+2.51.1
+
