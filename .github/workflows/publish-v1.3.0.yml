@@ -38,26 +38,28 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.1.0-test.apk
+        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.2.0-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.1.0-test
-          path: Silly-Pop-v0.1.0-test.apk
+          name: Silly-Pop-v0.2.0-test
+          path: Silly-Pop-v0.2.0-test.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish test release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.0-test
-          name: Silly-Pop v0.1.0-test
+          tag_name: v0.2.0-test
+          name: Silly-Pop v0.2.0-test
           prerelease: true
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 첫 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v0.2.0 테스트 버전입니다.
 
-            - 알림 권한만 사용
+            - 모듈형 ST 로고 적용
+            - 블랙/화이트 앱 아이콘 선택
+            - Termux 서버 플러그인 연결 확인 및 알림 전달 수정
+            - 앱 알림 권한 차단 시 정확한 오류 표시
             - 인터넷, 파일, 사진, 연락처, 전화, 문자, 접근성 권한 없음
-            - Termux:API 및 외부 푸시 서버 불필요
-          files: Silly-Pop-v0.1.0-test.apk
+          files: Silly-Pop-v0.2.0-test.apk
