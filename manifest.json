@@ -1,12 +1,12 @@
 {
-    "display_name": "Push Notifications",
-    "loading_order": 10,
+    "display_name": "답변 도착 알림",
+    "loading_order": 90,
     "requires": [],
     "optional": [],
     "js": "index.js",
-    "css": "",
-    "author": "Cohee1207",
-    "version": "1.0.0",
-    "homePage": "https://github.com/Cohee1207/SillyTavern-PushNotifications",
+    "css": "style.css",
+    "author": "Cohee1207, 담은",
+    "version": "1.1.0",
+    "homePage": "https://github.com/foreverharibo-boop/SillyTavern-PushNotifications",
     "auto_update": true
 }
