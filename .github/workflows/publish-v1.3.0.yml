@@ -31,6 +31,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
+          git reset -- .github/workflows/build-android.yml
           git commit -m "feat: add Silly-Pop Android companion app"
           git push
 
@@ -59,6 +60,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Silly-Pop-v0.1.0-test
-          path: Silly-Pop-v0.1.0-test.apk
+          path: |
+            Silly-Pop-v0.1.0-test.apk
+            .github/workflows/build-android.yml
           if-no-files-found: error
           retention-days: 30
