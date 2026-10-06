@@ -1,19 +1,10 @@
-self.addEventListener('notificationclick', (event) => {
-    event.notification.close();
-    const targetUrl = event.notification.data?.url || new URL('/', self.location.origin).href;
-
+// Migration-only tombstone. Browser notifications are no longer supported.
+// The extension also unregisters this exact script's registration on startup.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', event => {
     event.waitUntil((async () => {
-        const windows = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-        const sameOriginWindow = windows.find(client => {
-            try {
-                return new URL(client.url).origin === self.location.origin;
-            } catch {
-                return false;
-            }
-        });
-
-        if (sameOriginWindow) return sameOriginWindow.focus();
-
-        return clients.openWindow(targetUrl);
+        const notifications = await self.registration.getNotifications();
+        notifications.forEach(notification => notification.close());
+        await self.registration.unregister();
     })());
 });

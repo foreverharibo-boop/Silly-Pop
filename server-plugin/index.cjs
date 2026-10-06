@@ -7,9 +7,9 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
-const VERSION = '2.1.1';
+const VERSION = '2.2.0';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -30,67 +30,89 @@ const clientStates = new Map();
 const handledRequests = new Map();
 const originalEnd = http.ServerResponse.prototype.end;
 let patched = false;
-let lastCompanionCheck = { checkedAt: 0, installed: false };
+let lastCompanionCheck = { checkedAt: 0, installed: false, reason: 'unchecked', detail: '', command: '' };
+let pendingCompanionCheck;
 
-function broadcastCompleted(code, output) {
-    if (code !== 0) return false;
+function broadcastCompleted(code, output, ping = false) {
+    // TermuxAm maps legacy Activity.RESULT_OK (-1) to process exit 1.
+    // Allow that exact legacy combination only with our receiver's acknowledgement below.
+    if (code !== 0 && !(code === 1 && /result=-1\b/.test(output))) return false;
     if (/(?:error|exception|unable|not found|does not exist|permission denial)/i.test(output)) return false;
-    return /(?:broadcast completed|broadcasting:|silly-pop-ready|result=-1\b)/i.test(output);
+    // A completed broadcast with result=0 can mean NO receiver handled it.
+    // Require the acknowledgement written by our own receiver, not just am's exit code.
+    return ping ? /silly-pop-ready\b/.test(output) : /data=["']?ok(?:["'\s,]|$)/.test(output);
+}
+
+function bridgeCandidates(env = process.env) {
+    if (env.SILLY_POP_BRIDGE_COMMAND) return [env.SILLY_POP_BRIDGE_COMMAND];
+    const prefixes = [env.PREFIX, env.TERMUX__PREFIX, path.dirname(path.dirname(process.execPath))]
+        .filter(value => value && path.isAbsolute(value));
+    return [...new Set([
+        ...prefixes.map(prefix => path.join(prefix, 'bin', 'am')),
+        ...prefixes.map(prefix => path.join(prefix, 'bin', 'termux-am')),
+        ...(env.PATH || '').split(path.delimiter).filter(dir => path.isAbsolute(dir) && !dir.startsWith('/system/'))
+            .map(dir => path.join(dir, 'am')),
+    ])];
 }
 
 function getBridgeCommand() {
-    if (process.env.SILLY_POP_BRIDGE_COMMAND) {
-        return process.env.SILLY_POP_BRIDGE_COMMAND;
+    for (const command of bridgeCandidates()) {
+        if (!path.isAbsolute(command)) continue;
+        try {
+            fs.accessSync(command, fs.constants.X_OK);
+            return command;
+        } catch { /* Try the next Termux-provided wrapper. */ }
     }
-    return '/system/bin/am';
+    return '';
 }
 
 function bridgeCommandExists() {
-    const command = getBridgeCommand();
-    if (path.isAbsolute(command)) {
-        try {
-            fs.accessSync(command, fs.constants.X_OK);
-            return true;
-        } catch {
-            return false;
-        }
-    }
-    return false;
+    return Boolean(getBridgeCommand());
 }
 
-function companionAppInstalled() {
-    if (process.env.SILLY_POP_COMPANION_INSTALLED) {
-        return process.env.SILLY_POP_COMPANION_INSTALLED === '1';
-    }
-    if (!bridgeCommandExists()) return false;
+function broadcastArgs(action) {
+    // Android profile id, not "all" (which requires a cross-user permission).
+    const userId = typeof process.getuid === 'function' ? Math.floor(process.getuid() / 100000) : 0;
+    return ['broadcast', '--user', String(userId), '--receiver-foreground',
+        '--include-stopped-packages', '-n', APP_RECEIVER, '-a', action];
+}
 
-    const now = Date.now();
-    if (now - lastCompanionCheck.checkedAt < 15000) return lastCompanionCheck.installed;
+function executeBroadcast(command, args) {
+    return new Promise(resolve => {
+        const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: process.env });
+        let output = '';
+        let timedOut = false;
+        const collect = chunk => { output = (output + chunk.toString()).slice(-4000); };
+        child.stdout.on('data', collect);
+        child.stderr.on('data', collect);
+        const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, NOTIFICATION_TIMEOUT_MS);
+        child.once('error', error => { clearTimeout(timer); resolve({ code: -1, output: error.message, timedOut: false }); });
+        // close waits for stdout/stderr, unlike exit.
+        child.once('close', code => { clearTimeout(timer); resolve({ code, output, timedOut }); });
+    });
+}
 
-    try {
-        const result = spawnSync(getBridgeCommand(), [
-            'broadcast',
-            '--receiver-foreground',
-            '--include-stopped-packages',
-            '-n', APP_RECEIVER,
-            '-a', APP_PING_ACTION,
-        ], {
-            encoding: 'utf8',
-            timeout: 2500,
-            windowsHide: true,
-        });
-        const output = `${result.stdout || ''} ${result.stderr || ''}`;
-        // Some Samsung/Android builds always report result=0 for an exported
-        // receiver even when it handled the broadcast. A completed explicit
-        // broadcast is enough; missing components still emit an error and are
-        // rejected by broadcastCompleted().
-        const installed = broadcastCompleted(result.status, output);
-        lastCompanionCheck = { checkedAt: now, installed };
-        return installed;
-    } catch {
-        lastCompanionCheck = { checkedAt: now, installed: false };
-        return false;
-    }
+async function checkCompanion(force = false) {
+    if (pendingCompanionCheck) return pendingCompanionCheck;
+    if (!force && Date.now() - lastCompanionCheck.checkedAt < 15000) return lastCompanionCheck;
+    pendingCompanionCheck = (async () => {
+        const command = getBridgeCommand();
+        let status = { installed: false, command, reason: 'bridge_missing', detail: 'Termux용 am 명령이 없어요. Termux에서 pkg install termux-am 실행 후 다시 확인해 주세요.' };
+        if (command) {
+            const result = await executeBroadcast(command, broadcastArgs(APP_PING_ACTION));
+            const installed = broadcastCompleted(result.code, result.output, true);
+            status = { installed, command, reason: installed ? 'ready' : result.timedOut ? 'timeout' : 'receiver_unconfirmed',
+                detail: installed ? '알림 앱의 응답을 확인했어요.' : result.timedOut
+                    ? '앱 응답 시간이 초과됐어요. 앱을 한 번 열고 다시 확인해 주세요.'
+                    : '앱 응답을 확인하지 못했어요. 앱을 한 번 열고 아래 진단 내용을 확인해 주세요.',
+                diagnostic: installed ? '' : cleanText(result.output, 600),
+                appVersion: result.output.match(/silly-pop-ready:([\d.]+)/)?.[1] || '',
+                notificationAllowed: installed && !/permission=disabled/.test(result.output) };
+        }
+        lastCompanionCheck = { ...status, checkedAt: Date.now() };
+        return lastCompanionCheck;
+    })();
+    try { return await pendingCompanionCheck; } finally { pendingCompanionCheck = undefined; }
 }
 
 function cleanText(value, maxLength = 100) {
@@ -112,23 +134,11 @@ function safeUrl(value) {
     }
 }
 
-function runNotification({ title, content, sound, vibrate, url }) {
-    return new Promise((resolve, reject) => {
-        if (!bridgeCommandExists()) {
-            reject(new Error('이 서버에서는 안드로이드 앱 호출 명령을 찾지 못했습니다.'));
-            return;
-        }
-        if (!companionAppInstalled()) {
-            reject(new Error('Silly-Pop 알림 앱이 설치되지 않았습니다.'));
-            return;
-        }
-
+async function runNotification({ title, content, sound, vibrate, url }) {
+        const status = await checkCompanion();
+        if (!status.installed) throw new Error(`${status.detail} ${status.diagnostic || ''}`.trim());
         const args = [
-            'broadcast',
-            '--receiver-foreground',
-            '--include-stopped-packages',
-            '-n', APP_RECEIVER,
-            '-a', APP_ACTION,
+            ...broadcastArgs(APP_ACTION),
             '--es', 'title', cleanText(title, 120) || 'Silly-Pop',
             '--es', 'body', cleanText(content, 280) || '답변 생성이 완료됐어요.',
             '--es', 'url', safeUrl(url),
@@ -136,40 +146,14 @@ function runNotification({ title, content, sound, vibrate, url }) {
             '--ez', 'vibrate', vibrate ? 'true' : 'false',
         ];
 
-        const child = spawn(getBridgeCommand(), args, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-            env: process.env,
-        });
-        let stdout = '';
-        let stderr = '';
-        child.stdout.on('data', chunk => {
-            stdout += chunk.toString();
-            if (stdout.length > 2000) stdout = stdout.slice(-2000);
-        });
-        child.stderr.on('data', chunk => {
-            stderr += chunk.toString();
-            if (stderr.length > 2000) stderr = stderr.slice(-2000);
-        });
-        const timer = setTimeout(() => {
-            child.kill('SIGKILL');
-            reject(new Error('Silly-Pop 앱 호출이 시간 안에 완료되지 않았습니다.'));
-        }, NOTIFICATION_TIMEOUT_MS);
-        child.once('error', error => {
-            clearTimeout(timer);
-            reject(error);
-        });
-        child.once('exit', code => {
-            clearTimeout(timer);
-            const output = cleanText(`${stdout} ${stderr}`, 700);
-            if (/notification-permission-disabled/i.test(output)) {
-                reject(new Error('Silly-Pop 앱의 알림 권한이 꺼져 있습니다. 앱을 열어 권한을 다시 허용해 주세요.'));
-            } else if (broadcastCompleted(code, output) || process.env.SILLY_POP_ASSUME_BROADCAST_RESULT === '1') {
-                resolve();
-            } else {
-                reject(new Error(output || `안드로이드 앱 호출 종료 코드 ${code}`));
-            }
-        });
-    });
+        const result = await executeBroadcast(status.command, args);
+        if (/notification-permission-disabled/i.test(result.output)) {
+            throw new Error('Silly-Pop 앱의 알림 권한 또는 알림 채널이 꺼져 있어요. 앱의 알림 설정을 확인해 주세요.');
+        }
+        if (!broadcastCompleted(result.code, result.output)) {
+            throw new Error(result.timedOut ? '앱 알림 호출 시간이 초과됐어요.'
+                : `앱의 알림 수신 응답이 없어요. ${cleanText(result.output, 600)}`);
+        }
 }
 
 function booleanValue(value, fallback = false) {
@@ -272,14 +256,16 @@ const info = {
 async function init(router) {
     patchResponseEnd();
 
-    router.get('/status', (_request, response) => {
+    router.get('/status', async (request, response) => {
+        const status = await checkCompanion(request.query?.refresh === '1');
         response.json({
             ok: true,
             version: VERSION,
             protocol: PROTOCOL_VERSION,
-            appInstalled: companionAppInstalled(),
+            appInstalled: status.installed,
             bridgeCommand: bridgeCommandExists(),
-            appReady: bridgeCommandExists() && companionAppInstalled(),
+            appReady: status.installed && status.notificationAllowed,
+            ...status,
         });
     });
 
@@ -321,8 +307,7 @@ async function init(router) {
         }
     });
 
-    const status = bridgeCommandExists() && companionAppInstalled() ? 'Android app ready' : 'waiting for Android app';
-    console.log(`[Silly-Pop] Android companion bridge v${VERSION} loaded (${status}).`);
+    console.log(`[Silly-Pop] Android companion bridge v${VERSION} loaded (Termux am: ${getBridgeCommand() || 'missing'}).`);
 }
 
 async function exit() {
@@ -332,4 +317,4 @@ async function exit() {
     lastCompanionCheck = { checkedAt: 0, installed: false };
 }
 
-module.exports = { info, init, exit, __test: { broadcastCompleted } };
+module.exports = { info, init, exit, __test: { broadcastCompleted, bridgeCandidates, broadcastArgs, checkCompanion, runNotification, getMarker, shouldNotify } };

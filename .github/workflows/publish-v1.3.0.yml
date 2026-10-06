@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test extension and bridge
+        run: npm test
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -50,29 +53,31 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.1-test.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.1-test.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.2-test.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.2-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.2.1-test
-          path: Silly-Pop-v0.2.1-test.apk
+          name: Silly-Pop-v0.2.2-test
+          path: Silly-Pop-v0.2.2-test.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish test release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.1-test
-          name: Silly-Pop v0.2.1-test
+          tag_name: v0.2.2-test
+          name: Silly-Pop v0.2.2-test
           prerelease: true
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v0.2.1 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v0.2.2 테스트 버전입니다.
 
-            - 알림을 안드로이드 기본형으로 단순화
-            - 홈 화면 ST 로고 여백 확대
-            - 삼성 갤럭시/Termux 브로드캐스트 응답값 호환성 수정
-            - 앱 알림 권한 차단 시 정확한 오류 표시
+            - 흑백 화면·아이콘 동시 전환, 작은 버튼과 곡선형 ST 로고
+            - 브라우저 알림 제거, 앱 알림만 사용
+            - Termux용 am 호출 및 실제 수신 응답 확인
+            - 확장 1.4.0 / 서버 2.2.0 버전·연결 진단 표시
+            - 앱 0.2.1에서 삭제 없이 덮어 설치 가능
+            - 서버 플러그인도 별도 업데이트한 뒤 실리태번 완전 재시작 필요
             - 인터넷, 파일, 사진, 연락처, 전화, 문자, 접근성 권한 없음
-          files: Silly-Pop-v0.2.1-test.apk
+          files: Silly-Pop-v0.2.2-test.apk

@@ -1,35 +1,27 @@
 /*
  * Based on SillyTavern-PushNotifications by Cohee1207 / SillyTavern.
- * Mobile settings and service worker support added by 담은.
+ * Android companion integration by 담은.
  * Licensed under AGPL-3.0. See LICENSE.
  */
 
 const MODULE_NAME = 'response_notifier';
-const NOTIFICATION_TAG = 'sillytavern-response-ready';
-const WORKER_URL = new URL('./service-worker.js', import.meta.url);
-const WORKER_SCOPE = new URL('./', import.meta.url).pathname;
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
+const REQUIRED_BRIDGE_VERSION = '2.2.0';
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     backgroundOnly: true,
-    showPreview: false,
     sound: true,
     vibrate: true,
 });
 
 let settings;
-let registrationPromise;
-let pendingNotificationTimer;
-let pendingMessage;
-let permissionWarningShown = false;
 let generationActive = false;
 let backgroundedDuringGeneration = false;
 let activeGenerationType = '';
 let companionState = { installed: false, ready: false, version: '', detail: '확인 중이에요.' };
 let lastToast = { key: '', at: 0 };
-const recentMessageKeys = new Map();
 const urgentStateImages = new Set();
 const clientId = getClientId();
 
@@ -56,6 +48,7 @@ function getSettings() {
 
     context.extensionSettings[MODULE_NAME] ??= {};
     const stored = context.extensionSettings[MODULE_NAME];
+    delete stored.showPreview;
     for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
         if (typeof stored[key] !== typeof value) stored[key] = value;
     }
@@ -82,161 +75,20 @@ function toast(type, message, title = 'Silly-Pop') {
     console[type === 'error' ? 'error' : 'log'](`[${title}] ${message}`);
 }
 
-function supportsNotifications() {
-    return Boolean(globalThis.isSecureContext && 'Notification' in globalThis && 'serviceWorker' in navigator);
-}
-
-async function waitForActiveWorker(registration) {
-    if (registration.active) return registration;
-    const worker = registration.installing || registration.waiting;
-    if (!worker) return registration;
-
-    await new Promise(resolve => {
-        const timeout = setTimeout(resolve, 4000);
-        worker.addEventListener('statechange', () => {
-            if (worker.state === 'activated' || worker.state === 'redundant') {
-                clearTimeout(timeout);
-                resolve();
-            }
-        });
-    });
-    return registration;
-}
-
-async function ensureServiceWorker() {
-    if (!supportsNotifications()) {
-        throw new Error('이 접속 환경에서는 시스템 알림을 사용할 수 없습니다.');
-    }
-
-    registrationPromise ??= navigator.serviceWorker
-        .register(WORKER_URL.href, { scope: WORKER_SCOPE, updateViaCache: 'none' })
-        .then(waitForActiveWorker)
-        .catch(error => {
-            registrationPromise = undefined;
-            throw error;
-        });
-    return registrationPromise;
-}
-
-async function requestNotificationPermission() {
-    if (!supportsNotifications()) {
-        updatePermissionStatus();
-        toast('error', '127.0.0.1 같은 로컬 주소에서 접속했는지 확인해 주세요.');
-        return 'unsupported';
-    }
-
-    if (Notification.permission === 'granted') {
-        await ensureServiceWorker();
-        updatePermissionStatus();
-        return 'granted';
-    }
-
-    if (Notification.permission === 'denied') {
-        updatePermissionStatus();
-        toast('warning', '삼성 인터넷의 사이트 알림 설정에서 SillyTavern 알림을 허용해 주세요.');
-        return 'denied';
-    }
-
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') {
-        await ensureServiceWorker();
-        toast('success', '알림 권한이 허용됐어요.');
-    } else {
-        toast('warning', '알림이 허용되지 않았어요. 삼성 인터넷 설정에서 다시 변경할 수 있어요.');
-    }
-    updatePermissionStatus();
-    return permission;
-}
-
-function getPermissionState() {
-    if (!globalThis.isSecureContext) {
-        return { state: 'unsupported', label: '사용 불가', detail: '127.0.0.1 로컬 주소 또는 HTTPS로 접속해 주세요.' };
-    }
-    if (!('Notification' in globalThis) || !('serviceWorker' in navigator)) {
-        return { state: 'unsupported', label: '미지원', detail: '현재 브라우저가 시스템 알림을 지원하지 않아요.' };
-    }
-    if (Notification.permission === 'granted') {
-        return { state: 'granted', label: '허용됨', detail: '답변이 끝나면 시스템 알림을 보낼 수 있어요.' };
-    }
-    if (Notification.permission === 'denied') {
-        return { state: 'denied', label: '차단됨', detail: '삼성 인터넷 설정의 사이트 알림에서 직접 허용해 주세요.' };
-    }
-    return { state: 'default', label: '권한 필요', detail: '아래 버튼을 눌러 알림을 허용해 주세요.' };
-}
-
-function updatePermissionStatus() {
-    const root = document.getElementById('st_response_notifier_settings');
-    if (!root) return;
-    const permission = getPermissionState();
-    const status = root.querySelector('.st-rn-status');
-    const detail = root.querySelector('.st-rn-status-detail');
-    const permissionButton = root.querySelector('#st_rn_permission');
-    status.dataset.state = permission.state;
-    status.textContent = permission.label;
-    detail.textContent = permission.detail;
-    permissionButton.textContent = permission.state === 'granted' ? '권한 확인 완료' : '알림 권한 허용';
-    permissionButton.disabled = permission.state === 'granted' || permission.state === 'unsupported';
-}
-
-function toPlainText(value) {
-    const element = document.createElement('div');
-    element.innerHTML = String(value || '');
-    return (element.textContent || '')
-        .replace(/```[\s\S]*?```/g, ' ')
-        .replace(/[*_~`#>]+/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function makeNotificationBody(message) {
-    if (!settings.showPreview) return '답변 생성이 완료됐어요. 눌러서 확인하세요.';
-    const preview = toPlainText(message?.mes);
-    if (!preview) return '답변 생성이 완료됐어요. 눌러서 확인하세요.';
-    return preview.length > 140 ? `${preview.slice(0, 137)}…` : preview;
-}
-
-async function showSystemNotification({ title, body, test = false }) {
-    if (!test && !settings.enabled) return false;
-    if (!supportsNotifications() || Notification.permission !== 'granted') {
-        if (!test && !permissionWarningShown) {
-            permissionWarningShown = true;
-            toast('warning', '확장 설정에서 먼저 알림 권한을 허용해 주세요.');
-        }
-        updatePermissionStatus();
-        return false;
-    }
-
-    const registration = await ensureServiceWorker();
-    const options = {
-        body,
-        icon: '/img/apple-icon-192x192.png',
-        badge: '/img/logo.png',
-        tag: NOTIFICATION_TAG,
-        renotify: true,
-        silent: !settings.sound,
-        vibrate: settings.vibrate ? [140, 70, 140] : [],
-        data: { url: globalThis.location.href },
-    };
-
+// Remove ONLY this extension's old worker; never unregister other app workers.
+async function retireBrowserNotifications() {
+    if (!('serviceWorker' in navigator)) return;
+    const ownScript = new URL('./service-worker.js', import.meta.url).href;
     try {
-        await registration.showNotification(title, options);
-        return true;
-    } catch (error) {
-        console.warn('[Silly-Pop] 서비스 워커 알림 실패, 일반 알림으로 재시도합니다.', error);
-        try {
-            new Notification(title, options);
-            return true;
-        } catch (fallbackError) {
-            console.error('[Silly-Pop] 알림 표시 실패', fallbackError);
-            if (test) toast('error', '테스트 알림을 표시하지 못했어요. 브라우저 알림 설정을 확인해 주세요.');
-            return false;
+        for (const registration of await navigator.serviceWorker.getRegistrations()) {
+            const workers = [registration.active, registration.waiting, registration.installing];
+            if (!workers.some(worker => worker?.scriptURL === ownScript)) continue;
+            const notifications = await registration.getNotifications();
+            notifications.forEach(notification => notification.close());
+            await registration.unregister();
         }
-    }
-}
-
-function cleanupRecentKeys(now) {
-    for (const [key, timestamp] of recentMessageKeys) {
-        if (now - timestamp > 30000) recentMessageKeys.delete(key);
+    } catch (error) {
+        console.warn('[Silly-Pop] 이전 알림 정리 실패', error);
     }
 }
 
@@ -267,7 +119,7 @@ function makeCompanionMarker(type = activeGenerationType) {
 }
 
 function markGenerationPayload(payload, dryRun = false) {
-    if (!companionState.ready || !generationActive || dryRun || !payload || typeof payload !== 'object') return;
+    if (!companionState.installed || !generationActive || dryRun || !payload || typeof payload !== 'object') return;
     const type = payload.type || activeGenerationType;
     if (!isNotifiableGeneration(type)) return;
     payload.silly_pop = makeCompanionMarker(type);
@@ -293,55 +145,6 @@ function handlePageActivityChange() {
     }
 }
 
-function isRealAssistantMessage(message, eventType) {
-    if (!message || message.is_user || message.is_system || !message.mes) return false;
-    return !['first_message', 'command', 'extension', 'quiet'].includes(String(eventType || '').toLowerCase());
-}
-
-function queueResponseNotification(messageId, eventType) {
-    if (!settings.enabled) return;
-
-    // The Termux companion sends the notification even when the browser is frozen.
-    // Suppress the browser copy to avoid receiving the same notification twice.
-    if (companionState.ready) return;
-
-    const shouldNotify = !settings.backgroundOnly || !isPageForeground() || backgroundedDuringGeneration;
-    if (!shouldNotify) return;
-
-    const context = getContext();
-    const message = context?.chat?.[Number(messageId)];
-    if (!isRealAssistantMessage(message, eventType)) return;
-
-    const now = Date.now();
-    cleanupRecentKeys(now);
-    const key = [messageId, message.swipe_id ?? 0, message.mes].join('|');
-    if (recentMessageKeys.has(key)) return;
-    recentMessageKeys.set(key, now);
-
-    generationActive = false;
-    backgroundedDuringGeneration = false;
-    pendingMessage = message;
-    clearTimeout(pendingNotificationTimer);
-    pendingNotificationTimer = setTimeout(() => {
-        const latest = pendingMessage;
-        pendingMessage = undefined;
-        const name = toPlainText(latest?.name || context?.name2 || '');
-        const title = name ? `${name}의 답변이 도착했어요` : '답변이 도착했어요';
-        void showSystemNotification({ title, body: makeNotificationBody(latest) });
-    }, 350);
-}
-
-async function clearVisibleNotifications() {
-    if (document.visibilityState !== 'visible' || !registrationPromise) return;
-    try {
-        const registration = await registrationPromise;
-        const notifications = await registration.getNotifications({ tag: NOTIFICATION_TAG });
-        notifications.forEach(notification => notification.close());
-    } catch {
-        // 지원하지 않는 브라우저에서는 아무 작업도 하지 않습니다.
-    }
-}
-
 function updateCompanionStatus() {
     const root = document.getElementById('st_response_notifier_settings');
     if (!root) return;
@@ -352,34 +155,56 @@ function updateCompanionStatus() {
     badge.dataset.state = companionState.ready ? 'granted' : companionState.installed ? 'default' : 'unsupported';
     badge.textContent = companionState.ready ? '연결됨' : companionState.installed ? '준비 필요' : '미설치';
     detail.textContent = companionState.detail;
+    root.querySelector('.st-rn-versions').textContent =
+        `확장 1.4.0 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || '미확인'}`;
+    const diagnostic = root.querySelector('.st-rn-diagnostic');
+    diagnostic.hidden = !companionState.diagnostic;
+    diagnostic.textContent = companionState.diagnostic || '';
 }
 
-async function checkCompanion() {
-    try {
-        const response = await fetch(`${COMPANION_API}/status`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        companionState = {
-            installed: true,
-            ready: Boolean(data.appReady),
-            version: String(data.version || ''),
-            detail: data.appReady
-                ? `Silly-Pop 알림 앱과 연결됐어요. (브리지 v${data.version || '?'})`
-                : data.appInstalled
-                    ? '알림 앱은 있지만 안드로이드 연결 명령을 사용할 수 없어요.'
-                    : '서버 플러그인은 연결됐지만 Silly-Pop 알림 앱 설치가 필요해요.',
-        };
-        void sendCompanionState();
-    } catch {
-        companionState = {
-            installed: false,
-            ready: false,
-            version: '',
-            detail: '브라우저 알림으로 작동 중이에요. 서버 플러그인과 알림 앱을 연결하면 백그라운드에서도 확실히 알려줘요.',
-        };
+function needsBridgeUpdate(version) {
+    const found = String(version || '').split('.').map(Number);
+    const needed = REQUIRED_BRIDGE_VERSION.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+        if (!Number.isFinite(found[i])) return true;
+        if (found[i] !== needed[i]) return found[i] < needed[i];
     }
-    updateCompanionStatus();
-    return companionState;
+    return false;
+}
+
+let companionCheckPromise;
+async function checkCompanion(force = false) {
+    if (companionCheckPromise) return companionCheckPromise;
+    companionCheckPromise = (async () => {
+        try {
+            const response = await fetch(`${COMPANION_API}/status${force ? '?refresh=1' : ''}`, {
+                cache: 'no-store', signal: AbortSignal.timeout(12000),
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            const outdated = needsBridgeUpdate(data.version);
+            const allowed = data.notificationAllowed !== false;
+            companionState = {
+                installed: true,
+                ready: !outdated && Boolean(data.appReady),
+                version: String(data.version || ''),
+                appVersion: String(data.appVersion || ''),
+                diagnostic: String(data.diagnostic || ''),
+                detail: outdated
+                    ? `서버 플러그인이 v${data.version || '?'}예요. 서버 플러그인을 v${REQUIRED_BRIDGE_VERSION} 이상으로 업데이트하고 실리태번을 완전히 재시작해 주세요. 웹 확장 업데이트와는 별개예요.`
+                    : data.appInstalled && !allowed
+                        ? '앱은 연결됐지만 알림 권한이 꺼져 있어요. Silly-Pop 앱에서 허용해 주세요.'
+                        : data.appReady ? 'Silly-Pop 앱과 연결됐어요.' : data.detail || '앱의 응답을 확인하지 못했어요.',
+            };
+            void sendCompanionState();
+        } catch (error) {
+            companionState = { installed: false, ready: false, version: '', appVersion: '', diagnostic: '',
+                detail: `서버 플러그인에 연결하지 못했어요. 같은 휴대폰의 Termux 서버에 설치·활성화했는지 확인해 주세요. (${error.message})` };
+        }
+        updateCompanionStatus();
+        return companionState;
+    })();
+    try { return await companionCheckPromise; } finally { companionCheckPromise = undefined; }
 }
 
 async function sendCompanionState(urgent = false) {
@@ -451,25 +276,22 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.3.2</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.0</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
-                    <div class="st-rn-permission-card">
-                        <div><div class="st-rn-status" data-state="default">확인 중</div><div class="st-rn-status-detail">브라우저 알림 상태를 확인하고 있어요.</div></div>
-                        <button id="st_rn_permission" class="menu_button" type="button">알림 권한 허용</button>
-                    </div>
                     <div class="st-rn-permission-card st-rn-server-card">
                         <div><div class="st-rn-server-status" data-state="default">확인 중</div><div class="st-rn-server-detail">Silly-Pop 알림 앱 연결을 확인하고 있어요.</div></div>
                         <button id="st_rn_server_refresh" class="menu_button" type="button">연결 확인</button>
                     </div>
+                    <div class="st-rn-versions"></div>
+                    <pre class="st-rn-diagnostic" hidden></pre>
                     <label class="st-rn-row" for="st_rn_enabled"><span><b>답변 완료 알림</b><small>AI 답변 생성이 끝나면 알림을 보냅니다.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_background_only"><span><b>다른 앱을 볼 때만</b><small>실리태번을 보고 있을 때는 알림을 생략합니다.</small></span><input id="st_rn_background_only" type="checkbox" /></label>
-                    <label class="st-rn-row" for="st_rn_preview"><span><b>답변 미리보기</b><small>브라우저 알림 모드에서 답변 일부를 표시합니다.</small></span><input id="st_rn_preview" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_sound"><span><b>알림 소리</b></span><input id="st_rn_sound" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_vibrate"><span><b>진동</b></span><input id="st_rn_vibrate" type="checkbox" /></label>
                     <button id="st_rn_test" class="menu_button st-rn-test" type="button"><span class="fa-solid fa-paper-plane"></span> 테스트 알림 보내기</button>
-                    <div class="st-rn-note">Silly-Pop 앱이 연결되면 브라우저가 멈춰도 답변 완료 알림이 옵니다.</div>
+                    <div class="st-rn-note">알림은 같은 휴대폰의 Silly-Pop 앱으로만 보냅니다.</div>
                 </div>
             </div>
         </div>
@@ -478,30 +300,29 @@ function renderSettings() {
     const root = document.getElementById('st_response_notifier_settings');
     bindSetting(root, 'st_rn_enabled', 'enabled');
     bindSetting(root, 'st_rn_background_only', 'backgroundOnly');
-    bindSetting(root, 'st_rn_preview', 'showPreview');
     bindSetting(root, 'st_rn_sound', 'sound');
     bindSetting(root, 'st_rn_vibrate', 'vibrate');
-    root.querySelector('#st_rn_permission').addEventListener('click', () => void requestNotificationPermission());
     root.querySelector('#st_rn_server_refresh').addEventListener('click', async () => {
-        const state = await checkCompanion();
+        const button = root.querySelector('#st_rn_server_refresh');
+        button.disabled = true;
+        const state = await checkCompanion(true);
+        button.disabled = false;
         toast(state.ready ? 'success' : 'warning', state.detail);
     });
     root.querySelector('#st_rn_test').addEventListener('click', async () => {
-        if (companionState.ready) {
-            try {
-                await sendCompanionTest();
-                toast('success', 'Silly-Pop 앱으로 테스트 알림을 보냈어요.');
-            } catch (error) {
-                toast('error', `Silly-Pop 앱 알림에 실패했어요: ${error.message}`);
-            }
-            return;
+        const button = root.querySelector('#st_rn_test');
+        button.disabled = true;
+        try {
+            const state = await checkCompanion(true);
+            if (!state.ready) throw new Error(state.detail);
+            await sendCompanionTest();
+            toast('success', 'Silly-Pop 앱이 테스트 알림을 받았어요.');
+        } catch (error) {
+            toast('error', error.message);
+        } finally {
+            button.disabled = false;
         }
-        const permission = await requestNotificationPermission();
-        if (permission !== 'granted') return;
-        const shown = await showSystemNotification({ title: 'Silly-Pop', body: '테스트 알림이에요. 정상적으로 작동하고 있어요!', test: true });
-        if (shown) toast('success', '테스트 알림을 보냈어요.');
     });
-    updatePermissionStatus();
     updateCompanionStatus();
 }
 
@@ -511,7 +332,7 @@ function initialize() {
 
     const context = getContext();
     const eventTypes = context?.eventTypes || context?.event_types;
-    if (!context?.eventSource || !eventTypes?.MESSAGE_RECEIVED) {
+    if (!context?.eventSource || !eventTypes?.GENERATION_STARTED) {
         console.error('[Silly-Pop] SillyTavern 이벤트 API를 찾지 못했습니다.');
         return;
     }
@@ -528,14 +349,9 @@ function initialize() {
     if (eventTypes.CHAT_COMPLETION_SETTINGS_READY) {
         context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markGenerationPayload);
     }
-    context.eventSource.on(eventTypes.MESSAGE_RECEIVED, queueResponseNotification);
-    if (eventTypes.CHARACTER_MESSAGE_RENDERED) {
-        context.eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, queueResponseNotification);
-    }
     document.addEventListener('visibilitychange', () => {
         handlePageActivityChange();
         void sendCompanionState(true);
-        void clearVisibleNotifications();
     });
     globalThis.addEventListener('blur', () => {
         handlePageActivityChange();
@@ -544,17 +360,12 @@ function initialize() {
     globalThis.addEventListener('focus', () => {
         handlePageActivityChange();
         void sendCompanionState();
-        updatePermissionStatus();
+        void checkCompanion();
     });
 
     void checkCompanion();
 
-    if (supportsNotifications()) {
-        void ensureServiceWorker().catch(error => {
-            console.warn('[Silly-Pop] 서비스 워커 등록 실패', error);
-            updatePermissionStatus();
-        });
-    }
+    void retireBrowserNotifications();
 }
 
 if (document.readyState === 'loading') {

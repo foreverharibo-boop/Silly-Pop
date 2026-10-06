@@ -9,6 +9,10 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -31,6 +35,12 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        findViewById(R.id.screenRoot).setOnApplyWindowInsetsListener((view, insets) -> {
+            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            return insets;
+        });
+        findViewById(R.id.screenRoot).requestApplyInsets();
         NotificationHelper.createChannels(this);
 
         permissionStatus = findViewById(R.id.permissionStatus);
@@ -40,11 +50,9 @@ public final class MainActivity extends Activity {
         blackIconButton = findViewById(R.id.blackIconButton);
         whiteIconButton = findViewById(R.id.whiteIconButton);
         Button testButton = findViewById(R.id.testButton);
-        Button openSillyButton = findViewById(R.id.openSillyButton);
 
         permissionButton.setOnClickListener(view -> requestNotificationPermission());
         testButton.setOnClickListener(view -> sendTestNotification());
-        openSillyButton.setOnClickListener(view -> openSillyTavern());
         blackIconButton.setOnClickListener(view -> setIconStyle(ICON_BLACK, true));
         whiteIconButton.setOnClickListener(view -> setIconStyle(ICON_WHITE, true));
         setIconStyle(getSavedIconStyle(), false);
@@ -90,7 +98,7 @@ public final class MainActivity extends Activity {
         boolean shown = NotificationHelper.show(
             this,
             "Silly-Pop 테스트",
-            "톡! 알림이 예쁘게 잘 도착했어요 ✨",
+            "테스트 알림이 도착했어요.",
             url,
             true,
             true
@@ -98,22 +106,10 @@ public final class MainActivity extends Activity {
         Toast.makeText(this, shown ? "테스트 알림을 보냈어요!" : "알림 설정에서 Silly-Pop 알림을 허용해 주세요.", Toast.LENGTH_SHORT).show();
     }
 
-    private void openSillyTavern() {
-        String url = getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
-            .getString(NotificationHelper.KEY_LAST_URL, NotificationHelper.DEFAULT_SILLY_URL);
-        try {
-            Intent intent = NotificationHelper.createOpenIntent(this, url);
-            startActivity(intent);
-        } catch (Exception error) {
-            Toast.makeText(this, "실리 주소를 열 수 없어요.", Toast.LENGTH_SHORT).show();
-        }
-    }
-
     private void updatePermissionUi() {
         boolean allowed = hasNotificationPermission();
         permissionStatus.setText(allowed ? R.string.permission_allowed : R.string.permission_needed);
-        permissionStatus.setTextColor(getColor(allowed ? R.color.green : R.color.pink_500));
-        permissionButton.setText(allowed ? "설정 열기" : getString(R.string.permission_button));
+        permissionButton.setText(allowed ? "설정" : "허용하기");
     }
 
     private String getSavedIconStyle() {
@@ -132,24 +128,67 @@ public final class MainActivity extends Activity {
         logoImage.setImageResource(white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white);
         blackIconButton.setText(white ? R.string.icon_black : R.string.icon_black_selected);
         whiteIconButton.setText(white ? R.string.icon_white_selected : R.string.icon_white);
+        applyTheme(white);
 
         PackageManager packageManager = getPackageManager();
         ComponentName blackAlias = new ComponentName(this, getPackageName() + ".BlackIcon");
         ComponentName whiteAlias = new ComponentName(this, getPackageName() + ".WhiteIcon");
-        packageManager.setComponentEnabledSetting(
-            blackAlias,
-            white ? PackageManager.COMPONENT_ENABLED_STATE_DISABLED : PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-            PackageManager.DONT_KILL_APP
-        );
-        packageManager.setComponentEnabledSetting(
-            whiteAlias,
-            white ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            PackageManager.DONT_KILL_APP
-        );
+        // Enable the new icon first so there is never a moment with no launcher entry.
+        if (announce) {
+            packageManager.setComponentEnabledSetting(white ? whiteAlias : blackAlias,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
+            packageManager.setComponentEnabledSetting(white ? blackAlias : whiteAlias,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
+        }
 
         if (announce) {
-            Toast.makeText(this, white ? "화이트 아이콘으로 바꿨어요." : "블랙 아이콘으로 바꿨어요.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, white ? "화이트로 바꿨어요." : "블랙으로 바꿨어요.", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private GradientDrawable rounded(int fill, int border, int radius) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(radius * getResources().getDisplayMetrics().density);
+        drawable.setStroke(Math.max(1, (int) getResources().getDisplayMetrics().density), border);
+        return drawable;
+    }
+
+    private void colorText(View view, int primary, int secondary) {
+        if (view instanceof TextView) {
+            ((TextView) view).setTextColor("secondary".equals(view.getTag()) ? secondary : primary);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) colorText(group.getChildAt(i), primary, secondary);
+        }
+    }
+
+    private void applyTheme(boolean white) {
+        int background = Color.parseColor(white ? "#FFFFFF" : "#101010");
+        int surface = Color.parseColor(white ? "#F7F7F7" : "#1B1B1B");
+        int primary = Color.parseColor(white ? "#151515" : "#F5F5F5");
+        int secondary = Color.parseColor(white ? "#707070" : "#A6A6A6");
+        int border = Color.parseColor(white ? "#E3E3E3" : "#333333");
+        View root = findViewById(R.id.screenRoot);
+        root.setBackgroundColor(background);
+        colorText(root, primary, secondary);
+        findViewById(R.id.settingsCard).setBackground(rounded(surface, border, 16));
+        findViewById(R.id.divider).setBackgroundColor(border);
+        permissionButton.setBackground(rounded(surface, border, 10));
+        Button test = findViewById(R.id.testButton);
+        test.setBackground(rounded(primary, primary, 12));
+        test.setTextColor(background);
+        blackIconButton.setBackground(rounded(Color.BLACK, white ? border : primary, 9));
+        blackIconButton.setTextColor(Color.WHITE);
+        whiteIconButton.setBackground(rounded(Color.WHITE, white ? primary : border, 9));
+        whiteIconButton.setTextColor(Color.BLACK);
+        ((ImageView) findViewById(R.id.privacyIcon)).setColorFilter(secondary);
+        getWindow().setStatusBarColor(background);
+        getWindow().setNavigationBarColor(background);
+        getWindow().getDecorView().setSystemUiVisibility(white
+            ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
+        updatePermissionUi();
     }
 
     @Override

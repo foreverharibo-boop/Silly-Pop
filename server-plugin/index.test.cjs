@@ -1,84 +1,97 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const http = require('node:http');
-
-process.env.SILLY_POP_BRIDGE_COMMAND = '/bin/true';
-process.env.SILLY_POP_COMPANION_INSTALLED = '1';
-process.env.SILLY_POP_ASSUME_BROADCAST_RESULT = '1';
-
-const plugin = require('./index.cjs');
-
-assert.equal(plugin.__test.broadcastCompleted(0, 'Broadcast completed: result=0'), true);
-assert.equal(plugin.__test.broadcastCompleted(0, 'Broadcast completed: result=-1, data="silly-pop-ready"'), true);
-assert.equal(plugin.__test.broadcastCompleted(0, 'Error: receiver not found'), false);
-assert.equal(plugin.__test.broadcastCompleted(1, 'Broadcast completed: result=0'), false);
-
-function makeResponse() {
-    return {
-        statusCode: 200,
-        body: undefined,
-        status(code) {
-            this.statusCode = code;
-            return this;
-        },
-        json(body) {
-            this.body = body;
-            return this;
-        },
-    };
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'silly-pop-test-'));
+const command = path.join(temporary, 'am');
+fs.writeFileSync(command, `#!${process.execPath}
+const args = process.argv.slice(2);
+require('node:fs').appendFileSync(process.env.SILLY_POP_TEST_CALLS, JSON.stringify(args) + '\\n');
+const ping = args.includes('com.foreverharibo.sillypop.PING');
+if (process.env.SILLY_POP_TEST_MODE === 'error') {
+    console.error('java.lang.SecurityException: permission denial'); process.exit(1);
 }
+if (process.env.SILLY_POP_TEST_MODE === 'missing') console.log('Broadcast completed: result=0');
+else if (process.env.SILLY_POP_TEST_MODE === 'denied') console.log(ping
+    ? 'Broadcast completed: result=-1, data="silly-pop-ready:0.2.2;permission=disabled"'
+    : 'Broadcast completed: result=0, data="notification-permission-disabled"');
+else console.log(ping
+    ? 'Broadcast completed: result=-1, data="silly-pop-ready:0.2.2;permission=allowed"'
+    : 'Broadcast completed: result=-1, data="ok"');
+`, { mode: 0o700 });
+process.env.SILLY_POP_BRIDGE_COMMAND = command;
+process.env.SILLY_POP_TEST_CALLS = path.join(temporary, 'calls.jsonl');
+const plugin = require('./index.cjs');
+const api = plugin.__test;
 
+function response() {
+    return { statusCode: 200, body: undefined, status(code) { this.statusCode = code; return this; },
+        json(body) { this.body = body; return this; } };
+}
 async function run() {
+    assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=0', true), false);
+    assert.equal(api.broadcastCompleted(0, 'Broadcasting: Intent {}'), false);
+    assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=-1, data="silly-pop-ready"', true), true);
+    assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=0, data="silly-pop-ready:0.2.2"', true), true);
+    assert.equal(api.broadcastCompleted(0, 'Broadcast completed: result=-1, data="ok"'), true);
+    assert.equal(api.broadcastCompleted(0, 'Error: receiver not found', true), false);
+    assert.equal(api.broadcastCompleted(1, 'data="ok"'), false);
+    assert.equal(api.broadcastCompleted(1, 'Broadcast completed: result=-1, data="silly-pop-ready"', true), true);
+    assert.equal(api.broadcastCompleted(1, 'Broadcast completed: result=-1, data="ok"'), true);
+    assert.equal(api.broadcastCompleted(1, 'Broadcast completed: result=-1', true), false);
+    assert.equal(api.broadcastCompleted(0, 'notification-permission-disabled'), false);
+    const candidates = api.bridgeCandidates({ PREFIX: '/data/data/com.termux/files/usr', PATH: '/system/bin:/bin' });
+    assert.equal(candidates[0], '/data/data/com.termux/files/usr/bin/am');
+    assert(!candidates.includes('/system/bin/am'));
+    assert.deepEqual(api.bridgeCandidates({ SILLY_POP_BRIDGE_COMMAND: '/test/am' }), ['/test/am']);
+    assert(api.broadcastArgs('PING').includes('--user'));
+    assert(!api.broadcastArgs('PING').includes('all'));
+
     const originalEnd = http.ServerResponse.prototype.end;
     const routes = { get: new Map(), post: new Map() };
-    const router = {
-        get(route, handler) { routes.get.set(route, handler); },
-        post(route, handler) { routes.post.set(route, handler); },
-    };
+    await plugin.init({ get: (p, f) => routes.get.set(p, f), post: (p, f) => routes.post.set(p, f) });
+    assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
+    const status = response();
+    await routes.get.get('/status')({query:{refresh:'1'}}, status);
+    assert.equal(status.body.version, '2.2.0');
+    assert.equal(status.body.appReady, true);
+    assert.equal(status.body.appVersion, '0.2.2');
+    assert.equal(status.body.command, command);
 
-    await plugin.init(router);
-    assert.notEqual(http.ServerResponse.prototype.end, originalEnd, 'response end should be patched');
+    const state = response();
+    routes.get.get('/state')({ query: { clientId: 'test-client', visible: '0', enabled: '1', backgroundOnly: '1' } }, state);
+    assert.equal(state.body.ok, true);
+    assert.equal(api.shouldNotify({clientId:'test-client', enabled:true, type:'normal'}), true);
+    assert.equal(api.shouldNotify({clientId:'test-client', enabled:true, type:'quiet'}), false);
+    assert.equal(api.shouldNotify({clientId:'test-client', enabled:false, type:'normal'}), false);
+    const test = response();
+    await routes.post.get('/test')({ body: { sound:true, vibrate:true, url:'http://127.0.0.1:8000/' } }, test);
+    assert.equal(test.body.ok, true);
+    let calls = fs.readFileSync(process.env.SILLY_POP_TEST_CALLS, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(calls.filter(args => args.includes('com.foreverharibo.sillypop.NOTIFY')).length, 1);
+    assert(calls.every(args => args.includes('--user') && args.includes('-n')));
 
-    const statusResponse = makeResponse();
-    routes.get.get('/status')({}, statusResponse);
-    assert.equal(statusResponse.statusCode, 200);
-    assert.equal(statusResponse.body.ok, true);
-    assert.equal(statusResponse.body.appInstalled, true);
-    assert.equal(statusResponse.body.bridgeCommand, true);
-    assert.equal(statusResponse.body.appReady, true);
-
-    const stateResponse = makeResponse();
-    routes.get.get('/state')({
-        query: {
-            clientId: 'test-client',
-            visible: '0',
-            enabled: '1',
-            backgroundOnly: '1',
-            sound: '1',
-            vibrate: '1',
-            url: 'http://127.0.0.1:8000/',
-        },
-    }, stateResponse);
-    assert.equal(stateResponse.body.ok, true);
-
-    const testResponse = makeResponse();
-    await routes.post.get('/test')({
-        body: {
-            sound: true,
-            vibrate: true,
-            url: 'http://127.0.0.1:8000/',
-        },
-    }, testResponse);
-    assert.equal(testResponse.statusCode, 200);
-    assert.equal(testResponse.body.ok, true);
-
+    process.env.SILLY_POP_TEST_MODE = 'missing';
+    assert.equal((await api.checkCompanion(true)).installed, false, 'result=0 cannot prove installation');
+    await assert.rejects(api.runNotification({}), /앱 응답/);
+    process.env.SILLY_POP_TEST_MODE = 'denied';
+    const denied = response();
+    await routes.get.get('/status')({query:{refresh:'1'}}, denied);
+    assert.equal(denied.body.appInstalled, true);
+    assert.equal(denied.body.appReady, false);
+    await assert.rejects(api.runNotification({}), /알림 권한/);
+    process.env.SILLY_POP_TEST_MODE = 'error';
+    const error = await api.checkCompanion(true);
+    assert.equal(error.installed, false);
+    assert.match(error.diagnostic, /SecurityException/);
+    process.env.SILLY_POP_BRIDGE_COMMAND = path.join(temporary, 'nonexistent');
+    const missing = await api.checkCompanion(true);
+    assert.equal(missing.reason, 'bridge_missing');
+    assert.match(missing.detail, /pkg install termux-am/);
     await plugin.exit();
-    assert.equal(http.ServerResponse.prototype.end, originalEnd, 'response end should be restored');
+    assert.equal(http.ServerResponse.prototype.end, originalEnd);
 }
-
-run().then(
-    () => console.log('Silly-Pop server companion tests passed.'),
-    error => {
-        console.error(error);
-        process.exitCode = 1;
-    },
-);
+run().then(() => console.log('Silly-Pop bridge tests passed (command selection, acknowledgement, permissions, diagnostics).'))
+    .catch(error => { console.error(error); process.exitCode = 1; })
+    .finally(async () => { await plugin.exit(); fs.rmSync(temporary, {recursive:true, force:true}); });

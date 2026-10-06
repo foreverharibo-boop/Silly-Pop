@@ -14,7 +14,8 @@ public final class SillyPopReceiver extends BroadcastReceiver {
         if (intent == null) return;
         if (ACTION_PING.equals(intent.getAction())) {
             setResultCode(ActivityResultCodes.OK);
-            setResultData("silly-pop-ready");
+            setResultData("silly-pop-ready:" + BuildConfig.VERSION_NAME + ";permission="
+                + (NotificationHelper.canNotify(context) ? "allowed" : "disabled"));
             return;
         }
         if (!ACTION_NOTIFY.equals(intent.getAction())) return;
@@ -60,7 +61,9 @@ public final class SillyPopReceiver extends BroadcastReceiver {
     }
 
     private static final class ActivityResultCodes {
-        private static final int OK = -1;
-        private static final int CANCELED = 0;
+        // TermuxAm propagates broadcast results to the shell exit code.
+        // This is NOT an activity result: zero is success, one is failure.
+        private static final int OK = 0;
+        private static final int CANCELED = 1;
     }
 }

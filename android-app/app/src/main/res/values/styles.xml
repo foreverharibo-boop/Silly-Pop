@@ -1,10 +1,11 @@
 <resources>
     <style name="Theme.SillyPop" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:statusBarColor">@color/lavender_50</item>
-        <item name="android:navigationBarColor">@color/lavender_50</item>
+        <item name="android:statusBarColor">#101010</item>
+        <item name="android:navigationBarColor">#101010</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:colorAccent">@color/lavender_500</item>
+        <item name="android:colorAccent">#808080</item>
+        <item name="android:windowBackground">#101010</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

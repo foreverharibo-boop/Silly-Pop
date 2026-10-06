@@ -7,7 +7,6 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -44,8 +43,6 @@ public final class NotificationHelper {
     private static NotificationChannel makeChannel(String id, String name, boolean sound, boolean vibrate) {
         NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("SillyTavern 답변 생성 완료 알림");
-        channel.enableLights(true);
-        channel.setLightColor(Color.rgb(139, 109, 233));
         channel.enableVibration(vibrate);
         channel.setVibrationPattern(vibrate ? VIBRATION : null);
 
@@ -62,16 +59,24 @@ public final class NotificationHelper {
         return channel;
     }
 
-    public static boolean show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
-        createChannels(context);
+    public static boolean canNotify(Context context) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         if (manager == null || !manager.areNotificationsEnabled()) return false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
             && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return false;
         }
+        return true;
+    }
+
+    public static boolean show(Context context, String title, String body, String url, boolean sound, boolean vibrate) {
+        createChannels(context);
+        if (!canNotify(context)) return false;
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
 
         String channelId = channelId(sound, vibrate);
+        NotificationChannel channel = manager.getNotificationChannel(channelId);
+        if (channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
         PendingIntent openIntent = PendingIntent.getActivity(
             context,
             NEXT_ID.incrementAndGet(),

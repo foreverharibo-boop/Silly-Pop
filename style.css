@@ -110,6 +110,20 @@
     text-align: center;
 }
 
+#st_response_notifier_settings .st-rn-versions {
+    font-size: 0.72em;
+    opacity: 0.6;
+    margin: 0.35rem 0 0.6rem;
+}
+
+#st_response_notifier_settings .st-rn-diagnostic {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.72em;
+    max-height: 8rem;
+    overflow: auto;
+}
+
 @media (max-width: 700px) {
     #st_response_notifier_settings .st-rn-permission-card {
         align-items: flex-start;
