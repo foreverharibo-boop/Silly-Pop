@@ -1,10 +1,10 @@
-From b4003ca40f9408bd955fc64be8c5671768c562f2 Mon Sep 17 00:00:00 2001
+From 5c6c9d6847f4078678dbb12d1edc9576a14aced2 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Tue, 6 Oct 2026 18:14:56 +0200
 Subject: [PATCH] fix: restore Android notifications and add icon themes
 
 ---
- .github/workflows/build-android.yml           |  6 +-
+ .github/workflows/publish-v1.3.0.yml          | 20 +++---
  README.md                                     | 11 ++-
  android-app/README.md                         |  2 +
  android-app/app/build.gradle                  |  4 +-
@@ -33,7 +33,7 @@ Subject: [PATCH] fix: restore Android notifications and add icon themes
  package.json                                  |  2 +-
  server-plugin/index.cjs                       | 63 ++++++++++++-----
  server-plugin/index.test.cjs                  |  1 +
- 29 files changed, 401 insertions(+), 57 deletions(-)
+ 29 files changed, 409 insertions(+), 63 deletions(-)
  create mode 100644 android-app/app/src/main/res/drawable/bg_icon_choice_black.xml
  create mode 100644 android-app/app/src/main/res/drawable/bg_icon_choice_white.xml
  create mode 100644 android-app/app/src/main/res/drawable/bg_logo_black.xml
@@ -45,19 +45,18 @@ Subject: [PATCH] fix: restore Android notifications and add icon themes
  create mode 100644 android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white.xml
  create mode 100644 android-app/app/src/main/res/mipmap-anydpi-v26/ic_launcher_white_round.xml
 
-diff --git a/.github/workflows/build-android.yml b/.github/workflows/build-android.yml
-index 3e6d3c5..64bb858 100644
---- a/.github/workflows/build-android.yml
-+++ b/.github/workflows/build-android.yml
-@@ -42,12 +42,12 @@ jobs:
+diff --git a/.github/workflows/publish-v1.3.0.yml b/.github/workflows/publish-v1.3.0.yml
+index f052905..1069e64 100644
+--- a/.github/workflows/publish-v1.3.0.yml
++++ b/.github/workflows/publish-v1.3.0.yml
+@@ -38,26 +38,28 @@ jobs:
          run: gradle --no-daemon :app:assembleDebug
  
        - name: Rename APK
 -        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.1.0-test.apk
 +        run: cp android-app/app/build/outputs/apk/debug/app-debug.apk Silly-Pop-v0.2.0-test.apk
  
-       - name: Upload APK
-         uses: actions/upload-artifact@v4
+       - uses: actions/upload-artifact@v4
          with:
 -          name: Silly-Pop-v0.1.0-test
 -          path: Silly-Pop-v0.1.0-test.apk
@@ -65,6 +64,29 @@ index 3e6d3c5..64bb858 100644
 +          path: Silly-Pop-v0.2.0-test.apk
            if-no-files-found: error
            retention-days: 30
+ 
+       - name: Publish test release
+         uses: softprops/action-gh-release@v2
+         with:
+-          tag_name: v0.1.0-test
+-          name: Silly-Pop v0.1.0-test
++          tag_name: v0.2.0-test
++          name: Silly-Pop v0.2.0-test
+           prerelease: true
+           generate_release_notes: false
+           body: |
+-            실리팝 안드로이드 알림 앱 첫 테스트 버전입니다.
++            실리팝 안드로이드 알림 앱 v0.2.0 테스트 버전입니다.
+ 
+-            - 알림 권한만 사용
++            - 모듈형 ST 로고 적용
++            - 블랙/화이트 앱 아이콘 선택
++            - Termux 서버 플러그인 연결 확인 및 알림 전달 수정
++            - 앱 알림 권한 차단 시 정확한 오류 표시
+             - 인터넷, 파일, 사진, 연락처, 전화, 문자, 접근성 권한 없음
+-            - Termux:API 및 외부 푸시 서버 불필요
+-          files: Silly-Pop-v0.1.0-test.apk
++          files: Silly-Pop-v0.2.0-test.apk
 diff --git a/README.md b/README.md
 index d447b79..b58892d 100644
 --- a/README.md
