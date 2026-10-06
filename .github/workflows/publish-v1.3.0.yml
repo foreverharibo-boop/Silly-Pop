@@ -23,7 +23,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-
+      - name: Install Android SDK
+        shell: bash
+        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
