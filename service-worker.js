@@ -12,12 +12,7 @@ self.addEventListener('notificationclick', (event) => {
             }
         });
 
-        if (sameOriginWindow) {
-            if ('navigate' in sameOriginWindow && sameOriginWindow.url !== targetUrl) {
-                await sameOriginWindow.navigate(targetUrl);
-            }
-            return sameOriginWindow.focus();
-        }
+        if (sameOriginWindow) return sameOriginWindow.focus();
 
         return clients.openWindow(targetUrl);
     })());
