@@ -78,32 +78,30 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.4-test.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.4-test.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v0.2.5-test.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v0.2.5-test.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v0.2.4-test
-          path: Silly-Pop-v0.2.4-test.apk
+          name: Silly-Pop-v0.2.5-test
+          path: Silly-Pop-v0.2.5-test.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish test release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.2.4-test
-          name: Silly-Pop v0.2.4-test
+          tag_name: v0.2.5-test
+          name: Silly-Pop v0.2.5-test
           prerelease: true
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v0.2.4 테스트 버전입니다.
+            실리팝 안드로이드 알림 앱 v0.2.5 테스트 버전입니다.
 
-            - Termux 서버의 AI 응답 수신 완료 시 알림 (웹 확장 1.5.0 / 서버 2.3.0 필요)
-            - 100LOG 초안·재작성, inSTead 재작성의 서버 응답 감지
-            - 브라우저 복귀 후 화면 게시에 의한 지연·중복 알림 제거
-            - 알림 클릭 시 해당 주소를 처리하는 설치된 WebAPK가 확인될 때만 웹앱으로 이동
-            - 웹앱이 없거나 여러 개면 아무 앱도 열지 않음, 삼성 인터넷 강제 실행 제거
+            - 블랙·화이트 선택을 알림 본문의 ST 아이콘에도 적용
+            - 이미 표시된 알림도 소리·진동 없이 아이콘 색상 갱신
+            - 알림 문구를 “AI 응답이 도착했어요.”로 정리 (서버 2.3.1 업데이트)
+            - 웹 확장 1.5.0의 서버 응답 감지와 웹앱 클릭 동작 유지
             - 0.2.1 이상에서 삭제 없이 덮어 설치 가능
-            - 100LOG 검수 완료 전에도 AI 응답 수신 알림이 올 수 있음
             - 인터넷, 파일, 사진, 연락처, 전화, 문자, 접근성 권한 없음
-          files: Silly-Pop-v0.2.4-test.apk
+          files: Silly-Pop-v0.2.5-test.apk

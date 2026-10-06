@@ -22,7 +22,7 @@ import java.util.Arrays;
 
 public final class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST = 1001;
-    private static final String KEY_ICON_STYLE = "launcher_icon_style";
+    private static final String KEY_ICON_STYLE = NotificationHelper.KEY_ICON_STYLE;
     private static final String ICON_BLACK = "black";
     private static final String ICON_WHITE = "white";
     private TextView permissionStatus;
@@ -130,6 +130,7 @@ public final class MainActivity extends Activity {
         blackIconButton.setText(white ? R.string.icon_black : R.string.icon_black_selected);
         whiteIconButton.setText(white ? R.string.icon_white_selected : R.string.icon_white);
         applyTheme(white);
+        if (announce) NotificationHelper.refreshNotificationIcons(this);
 
         PackageManager packageManager = getPackageManager();
         ComponentName blackAlias = new ComponentName(this, getPackageName() + ".BlackIcon");

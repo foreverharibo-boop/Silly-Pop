@@ -16,6 +16,10 @@ import android.content.pm.ResolveInfo;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -96,6 +100,12 @@ public final class CompanionTest {
         }
         assertTrue("Settings task must not be rooted at an icon alias", stableRoot);
 
+        NotificationManager notifications = context.getSystemService(NotificationManager.class);
+        notifications.cancelAll();
+        assertTrue(NotificationHelper.show(context, "ThemeRegression", "Keep this text",
+            NotificationHelper.DEFAULT_SILLY_URL, false, false));
+        StatusBarNotification original = notifications.getActiveNotifications()[0];
+
         int[] buttons = { R.id.whiteIconButton, R.id.blackIconButton, R.id.whiteIconButton };
         for (int button : buttons) {
             instrumentation.runOnMainSync(() -> screen.findViewById(button).performClick());
@@ -112,9 +122,16 @@ public final class CompanionTest {
                 pm.getComponentEnabledSetting(new ComponentName(packageName, packageName + (white ? ".WhiteIcon" : ".BlackIcon"))));
             assertEquals(PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 pm.getComponentEnabledSetting(new ComponentName(packageName, packageName + (white ? ".BlackIcon" : ".WhiteIcon"))));
+            StatusBarNotification[] active = notifications.getActiveNotifications();
+            assertEquals("Theme update must not add another notification", 1, active.length);
+            assertEquals(original.getId(), active[0].getId());
+            Notification updated = active[0].getNotification();
+            assertEquals("Keep this text", updated.extras.getCharSequence(Notification.EXTRA_TEXT).toString());
+            assertEquals(original.getNotification().when, updated.when);
+            assertTrue((updated.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0);
+            assertIconTheme(context, updated, white);
         }
 
-        NotificationManager notifications = context.getSystemService(NotificationManager.class);
         notifications.cancelAll();
         try (ParcelFileDescriptor output = instrumentation.getUiAutomation().executeShellCommand(
                 "am broadcast --receiver-foreground --include-stopped-packages -n " + packageName
@@ -133,6 +150,7 @@ public final class CompanionTest {
                     received = true;
                     assertNull("No installed localhost WebAPK: notification must not open a browser",
                         posted.getNotification().contentIntent);
+                    assertIconTheme(context, posted.getNotification(), true);
                 }
             }
             if (!received) SystemClock.sleep(100);
@@ -140,5 +158,17 @@ public final class CompanionTest {
         assertTrue("External broadcast must post a system notification after icon switches", received);
         notifications.cancelAll();
         instrumentation.runOnMainSync(screen::finish);
+    }
+
+    private static void assertIconTheme(Context context, Notification notification, boolean white) {
+        assertNotNull("Notification must carry its selected ST icon", notification.getLargeIcon());
+        Drawable icon = notification.getLargeIcon().loadDrawable(context);
+        Bitmap rendered = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888);
+        icon.setBounds(0, 0, 64, 64);
+        icon.draw(new Canvas(rendered));
+        int pixel = rendered.getPixel(32, 8); // Inside background, above the ST mark.
+        assertEquals(255, Color.alpha(pixel));
+        assertTrue("Icon background must match the selected theme",
+            white ? Color.red(pixel) > 240 : Color.red(pixel) < 20);
     }
 }

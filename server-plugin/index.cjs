@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.3.0';
+const VERSION = '2.3.1';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -277,9 +277,7 @@ async function handleCompletedResponse(response, marker) {
     try {
         const delivery = await runNotification({
             title,
-            content: marker.replySource === 'hundredlog'
-                ? 'AI 응답이 도착했어요. 검수·재작성은 이후에도 이어질 수 있어요.'
-                : 'AI 응답 수신이 완료됐어요.',
+            content: 'AI 응답이 도착했어요.',
             sound: state ? state.sound : marker.sound,
             vibrate: state ? state.vibrate : marker.vibrate,
             url: state?.url || marker.url,

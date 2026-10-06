@@ -11,13 +11,18 @@ import android.content.pm.ResolveInfo;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
+import android.service.notification.StatusBarNotification;
 import java.util.List;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class NotificationHelper {
     public static final String PREFERENCES = "silly_pop_settings";
+    public static final String KEY_ICON_STYLE = "launcher_icon_style";
     public static final String KEY_LAST_URL = "last_silly_url";
     public static final String DEFAULT_SILLY_URL = "http://127.0.0.1:8000/";
 
@@ -81,6 +86,7 @@ public final class NotificationHelper {
         Intent target = createOpenIntent(context, url);
         Notification.Builder builder = new Notification.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
+            .setLargeIcon(createThemeIcon(context))
             .setContentTitle(title)
             .setContentText(body)
             .setCategory(Notification.CATEGORY_MESSAGE)
@@ -123,6 +129,39 @@ public final class NotificationHelper {
                 PackageManager.MATCH_DEFAULT_ONLY | PackageManager.GET_META_DATA));
         } catch (RuntimeException ignored) {
             return null;
+        }
+    }
+
+    private static Bitmap createThemeIcon(Context context) {
+        boolean white = "white".equals(context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString(KEY_ICON_STYLE, "black"));
+        int size = Math.round(64 * context.getResources().getDisplayMetrics().density);
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+        Drawable background = context.getDrawable(white ? R.drawable.bg_logo_white : R.drawable.bg_logo_black);
+        background.setBounds(0, 0, size, size);
+        background.draw(canvas);
+        Drawable logo = context.getDrawable(white ? R.drawable.ic_st_modular_black : R.drawable.ic_st_modular_white);
+        int inset = Math.round(size * 0.14f);
+        logo.setBounds(inset, inset, size - inset, size - inset);
+        logo.draw(canvas);
+        return bitmap;
+    }
+
+    public static void refreshNotificationIcons(Context context) {
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager == null || !canNotify(context)) return;
+        Bitmap icon = createThemeIcon(context);
+        try {
+            for (StatusBarNotification posted : manager.getActiveNotifications()) {
+                Notification updated = Notification.Builder.recoverBuilder(context, posted.getNotification())
+                    .setLargeIcon(icon)
+                    .setOnlyAlertOnce(true)
+                    .build();
+                manager.notify(posted.getTag(), posted.getId(), updated);
+            }
+        } catch (SecurityException ignored) {
+            // A concurrent permission change must not interrupt theme switching.
         }
     }
 
