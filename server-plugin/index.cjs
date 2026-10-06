@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.2.2';
+const VERSION = '2.2.3';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -30,6 +30,7 @@ const clientStates = new Map();
 const handledRequests = new Map();
 const generationResults = new Map();
 let unmarkedGenerationAt = 0;
+let unmarkedGenerationType = '';
 const originalEnd = http.ServerResponse.prototype.end;
 let patched = false;
 let lastCompanionCheck = { checkedAt: 0, installed: false, reason: 'unchecked', detail: '', command: '' };
@@ -180,7 +181,13 @@ function booleanValue(value, fallback = false) {
 
 function getMarker(request) {
     const body = request?.body;
-    const marker = body?.silly_pop || body?.params?.silly_pop;
+    let headerMarker;
+    const header = request?.headers?.['x-silly-pop'];
+    if (typeof header === 'string' && header.length <= 16384) {
+        try { headerMarker = JSON.parse(decodeURIComponent(header)); } catch { /* Old clients use the body marker. */ }
+    }
+    const marker = [headerMarker, body?.silly_pop, body?.params?.silly_pop].find(value =>
+        value && typeof value === 'object' && Number(value.protocol) === PROTOCOL_VERSION && value.requestId && value.clientId);
     if (!marker || typeof marker !== 'object' || Number(marker.protocol) !== PROTOCOL_VERSION) return null;
     if (!marker.requestId || !marker.clientId) return null;
     return {
@@ -195,7 +202,8 @@ function getMarker(request) {
         backgroundedDuringGeneration: booleanValue(marker.backgroundedDuringGeneration, false),
         url: safeUrl(marker.url),
         characterName: cleanText(marker.characterName || body?.char_name, 80),
-        type: cleanText(marker.type || body?.type, 30).toLowerCase(),
+        // The actual request type takes precedence over a copied/stale marker.
+        type: cleanText(body?.type || body?.params?.type || marker.type, 30).toLowerCase(),
     };
 }
 
@@ -284,6 +292,7 @@ function patchResponseEnd() {
                     this.once('finish', () => { void handleCompletedResponse(this, marker); });
                 } else if (!['quiet', 'impersonate'].includes(request?.body?.type)) {
                     unmarkedGenerationAt = Date.now();
+                    unmarkedGenerationType = cleanText(request?.body?.type || request?.body?.params?.type, 30);
                 }
             }
         } catch (error) {
@@ -320,6 +329,7 @@ async function init(router) {
             appReady: Boolean(status.transportReady && status.notificationAllowed !== false),
             lastGeneration: generationResults.get(cleanText(request.query?.clientId, 100)) || null,
             unmarkedGenerationAt,
+            unmarkedGenerationType,
             ...status,
         });
     });
@@ -379,6 +389,7 @@ async function exit() {
     handledRequests.clear();
     generationResults.clear();
     unmarkedGenerationAt = 0;
+    unmarkedGenerationType = '';
     lastCompanionCheck = { checkedAt: 0, installed: false };
 }
 

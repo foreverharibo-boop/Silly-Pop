@@ -18,6 +18,7 @@ const plugin = require('../server-plugin/index.cjs');
 const routes = {GET:new Map(), POST:new Map()};
 const pending = [];
 const captured = [];
+const capturedMarkers = [];
 let baseUrl;
 let holdNextState;
 const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
@@ -46,6 +47,7 @@ const server = http.createServer(async (request,response)=>{
         if(handler) return await handler(request,response);
         if(url.pathname==='/api/backends/chat-completions/generate') {
             captured.push(request.body);
+            capturedMarkers.push(plugin.__test.getMarker(request));
             pending.push(response);
             return;
         }
@@ -58,8 +60,8 @@ function browser(clientId) {
     const context={extensionSettings:{}, name2:'Test', eventTypes:{GENERATION_STARTED:'started',
         GENERATION_ENDED:'ended',CHAT_COMPLETION_SETTINGS_READY:'payload',GENERATE_AFTER_DATA:'data'},
         eventSource:{on:(event,fn)=>events.set(event,fn)}};
-    const sandbox={console,URL,URLSearchParams,AbortSignal,Date,Math,setTimeout,clearTimeout,
-        location:{href:'http://127.0.0.1:8000/'},
+    const sandbox={console,URL,URLSearchParams,Request,Headers,AbortSignal,Date,Math,setTimeout,clearTimeout,
+        location:{href:`${baseUrl}/`},
         sessionStorage:{getItem:()=>clientId},
         navigator:{},
         document:{readyState:'loading',visibilityState:'visible',hasFocus:()=>true,getElementById:()=>null,
@@ -71,7 +73,7 @@ function browser(clientId) {
                 const accept=holdNextState; holdNextState=null;
                 return new Promise(resolve=>accept(()=>resolve(fetch(new URL(url,baseUrl),options))));
             }
-            const promise=fetch(new URL(url,baseUrl),options);
+            const promise=fetch(url instanceof Request ? url : new URL(url,baseUrl),options);
             requests.add(promise); promise.finally(()=>requests.delete(promise));
             return promise;
         }};
@@ -151,11 +153,26 @@ async function generate(client,payload) {
     disabled.response.end('{}'); await (await disabled.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='disabled','disabled preference was not respected');
     assert.equal(notificationCalls().length,2);
+
+    // Reproduce the screenshot: actual main request reaches the server with no
+    // event-generated body marker. The final fetch boundary must still mark it.
+    client.context.extensionSettings.response_notifier.enabled=true;
+    client.events.get('ended')();
+    const pendingBefore=pending.length;
+    const rawBody=JSON.stringify({type:'normal',messages:[{role:'user',content:'test'}]});
+    const raw=client.sandbox.fetch('/api/backends/chat-completions/generate',{
+        method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':'keep-me'},body:rawBody,
+    });
+    await until(()=>pending.length>pendingBefore,'unmarked generation did not arrive');
+    assert(!captured.at(-1).silly_pop,'transport metadata must not be inserted into prompt body');
+    assert(capturedMarkers.at(-1),'main request needs a header marker when events did not attach one');
+    pending.at(-1).end('{}'); await (await raw).text();
+    await until(()=>notificationCalls().length===3,'eventless HTTP main request was not dispatched');
     assert.equal((await status('another-client')).lastGeneration,null,'diagnostics are scoped to each client');
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, quiet, errors).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
-    await Promise.allSettled([...requests]);
     for(const response of pending) if(!response.writableEnded) response.end();
+    await Promise.allSettled([...requests]);
     server.closeAllConnections();
     await new Promise(resolve=>server.close(resolve));
     await plugin.exit();

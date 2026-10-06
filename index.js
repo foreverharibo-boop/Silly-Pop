@@ -7,7 +7,15 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.2.2';
+const REQUIRED_BRIDGE_VERSION = '2.2.3';
+const MARKER_HEADER = 'X-Silly-Pop';
+const GENERATION_PATHS = new Set([
+    '/api/backends/chat-completions/generate',
+    '/api/backends/text-completions/generate',
+    '/api/backends/kobold/generate',
+    '/api/novelai/generate',
+    '/api/azure/generate',
+]);
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -135,6 +143,55 @@ function markGenerationPayload(payload, dryRun = false) {
     payload.silly_pop = makeCompanionMarker(type);
 }
 
+function installRequestHook() {
+    const previousFetch = globalThis.fetch;
+    if (typeof previousFetch !== 'function' || previousFetch.__sillyPopTransport) return;
+    async function sillyPopFetch(input, init) {
+        let outgoing = init;
+        try {
+            const request = typeof Request === 'function' && input instanceof Request ? input : null;
+            const url = new URL(request ? request.url : String(input), globalThis.location.href);
+            const method = String(init?.method ?? request?.method ?? 'GET').toUpperCase();
+            if (method === 'POST' && url.origin === new URL(globalThis.location.href).origin
+                && GENERATION_PATHS.has(url.pathname)) {
+                // Inspect only local JSON generation requests. Do not consume the
+                // original Request stream or alter prompts, headers, signals or responses.
+                let body = init?.body;
+                if (body === undefined && request && !request.bodyUsed) body = await request.clone().text();
+                if (typeof body === 'string') {
+                    const payload = JSON.parse(body);
+                    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+                        const existing = payload.silly_pop || payload.params?.silly_pop;
+                        const ownMarker = existing?.protocol === COMPANION_PROTOCOL_VERSION
+                            && existing.clientId === clientId && existing.requestId ? existing : null;
+                        const type = payload.type || payload.params?.type || ownMarker?.type
+                            || (generationActive ? activeGenerationType : '');
+                        if (type && isNotifiableGeneration(type)) {
+                            const marker = ownMarker || makeCompanionMarker(type);
+                            const compact = {...marker, characterName: String(marker.characterName || '').slice(0,80),
+                                url: String(marker.url || '').slice(0,2048)};
+                            let encoded = encodeURIComponent(JSON.stringify(compact));
+                            if (encoded.length > 7500) {
+                                compact.url = new URL(globalThis.location.href).origin + '/';
+                                encoded = encodeURIComponent(JSON.stringify(compact));
+                            }
+                            const headers = new Headers(init?.headers ?? request?.headers);
+                            headers.set(MARKER_HEADER, encoded);
+                            outgoing = {...init, headers};
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Notification metadata must never block or retry the AI request.
+            console.warn('[Silly-Pop] 요청 표시를 추가하지 못해 원래 요청을 그대로 보냅니다.');
+        }
+        return previousFetch.call(this, input, outgoing);
+    }
+    sillyPopFetch.__sillyPopTransport = true;
+    globalThis.fetch = sillyPopFetch;
+}
+
 function handleGenerationStarted(type, _params, dryRun = false) {
     if (dryRun || !isNotifiableGeneration(type)) return;
     generationActive = true;
@@ -166,7 +223,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.2 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.4.3 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-diagnostic');
@@ -206,7 +263,7 @@ async function checkCompanion(force = false) {
                 diagnostic: String(data.diagnostic || ''),
                 generationDetail: data.lastGeneration
                     ? `최근 답변 (${new Date(data.lastGeneration.at).toLocaleTimeString()}): ${data.lastGeneration.detail}`
-                    : data.unmarkedGenerationAt ? '최근 답변: 알림 표시 없는 생성 요청 감지. 확장 업데이트 후 새로고침해 주세요.'
+                    : data.unmarkedGenerationAt ? `최근 답변: 요청의 알림 표시 누락 (유형: ${data.unmarkedGenerationType || '기본'})`
                         : '최근 답변: 감지 기록 없음',
                 detail: outdated
                     ? `서버 플러그인이 v${data.version || '?'}예요. 서버 플러그인을 v${REQUIRED_BRIDGE_VERSION} 이상으로 업데이트하고 실리태번을 완전히 재시작해 주세요. 웹 확장 업데이트와는 별개예요.`
@@ -296,7 +353,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.2</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.3</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -351,6 +408,7 @@ function renderSettings() {
 
 function initialize() {
     settings = getSettings();
+    installRequestHook();
     renderSettings();
 
     const context = getContext();
@@ -359,6 +417,9 @@ function initialize() {
         console.error('[Silly-Pop] SillyTavern 이벤트 API를 찾지 못했습니다.');
         return;
     }
+
+    // Other extensions may replace fetch while loading; wrap the final startup chain.
+    if (eventTypes.APP_READY) context.eventSource.on(eventTypes.APP_READY, installRequestHook);
 
     if (eventTypes.GENERATION_STARTED) {
         context.eventSource.on(eventTypes.GENERATION_STARTED, handleGenerationStarted);
