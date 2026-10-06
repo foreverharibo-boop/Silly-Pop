@@ -26,7 +26,8 @@
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 72%, transparent);
 }
 
-#st_response_notifier_settings .st-rn-status {
+#st_response_notifier_settings .st-rn-status,
+#st_response_notifier_settings .st-rn-server-status {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
@@ -34,7 +35,8 @@
     font-weight: 700;
 }
 
-#st_response_notifier_settings .st-rn-status::before {
+#st_response_notifier_settings .st-rn-status::before,
+#st_response_notifier_settings .st-rn-server-status::before {
     content: '';
     width: 0.48rem;
     height: 0.48rem;
@@ -43,18 +45,21 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, #d9a441 18%, transparent);
 }
 
-#st_response_notifier_settings .st-rn-status[data-state='granted']::before {
+#st_response_notifier_settings .st-rn-status[data-state='granted']::before,
+#st_response_notifier_settings .st-rn-server-status[data-state='granted']::before {
     background: #4cc982;
     box-shadow: 0 0 0 3px color-mix(in srgb, #4cc982 18%, transparent);
 }
 
 #st_response_notifier_settings .st-rn-status[data-state='denied']::before,
-#st_response_notifier_settings .st-rn-status[data-state='unsupported']::before {
+#st_response_notifier_settings .st-rn-status[data-state='unsupported']::before,
+#st_response_notifier_settings .st-rn-server-status[data-state='unsupported']::before {
     background: #e16a6a;
     box-shadow: 0 0 0 3px color-mix(in srgb, #e16a6a 18%, transparent);
 }
 
 #st_response_notifier_settings .st-rn-status-detail,
+#st_response_notifier_settings .st-rn-server-detail,
 #st_response_notifier_settings .st-rn-row small,
 #st_response_notifier_settings .st-rn-note {
     display: block;
@@ -62,6 +67,10 @@
     opacity: 0.66;
     font-size: 0.77em;
     line-height: 1.35;
+}
+
+#st_response_notifier_settings .st-rn-server-card {
+    margin-top: 0;
 }
 
 #st_response_notifier_settings .st-rn-permission-card .menu_button {
