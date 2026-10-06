@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.2.3';
+const VERSION = '2.2.4';
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -29,6 +29,7 @@ const GENERATION_PATHS = new Set([
 const clientStates = new Map();
 const handledRequests = new Map();
 const generationResults = new Map();
+const probeResults = new Map();
 let unmarkedGenerationAt = 0;
 let unmarkedGenerationType = '';
 const originalEnd = http.ServerResponse.prototype.end;
@@ -217,6 +218,9 @@ function pruneState(now = Date.now()) {
     for (const [id, result] of generationResults) {
         if (now - result.at > CLIENT_TTL_MS) generationResults.delete(id);
     }
+    for (const [id, result] of probeResults) {
+        if (now - result.at > CLIENT_TTL_MS) probeResults.delete(id);
+    }
 }
 
 function currentState(marker) {
@@ -285,7 +289,12 @@ function patchResponseEnd() {
         try {
             const request = this.req;
             const pathname = String(request?.originalUrl || request?.url || '').split('?')[0];
-            if (!this.__sillyPopTracked && GENERATION_PATHS.has(pathname)) {
+            if (request?.method === 'POST' && pathname === '/api/plugins/silly-pop/probe') {
+                const marker = getMarker(request);
+                if (marker) probeResults.set(marker.clientId, {requestId: marker.requestId, at: Date.now()});
+                pruneState();
+            }
+            if (request?.method === 'POST' && !this.__sillyPopTracked && GENERATION_PATHS.has(pathname)) {
                 const marker = getMarker(request);
                 if (marker) {
                     this.__sillyPopTracked = true;
@@ -328,10 +337,19 @@ async function init(router) {
             bridgeCommand: bridgeCommandExists(),
             appReady: Boolean(status.transportReady && status.notificationAllowed !== false),
             lastGeneration: generationResults.get(cleanText(request.query?.clientId, 100)) || null,
+            lastProbe: probeResults.get(cleanText(request.query?.clientId, 100)) || null,
             unmarkedGenerationAt,
             unmarkedGenerationType,
             ...status,
         });
+    });
+
+    // Exercise metadata transport and the response observer without contacting an
+    // AI backend or dispatching an Android broadcast. Never a generation route.
+    router.post('/probe', (request, response) => {
+        const header = getMarker({headers: request.headers});
+        const body = getMarker({body: request.body});
+        response.json({ok: true, header: Boolean(header), body: Boolean(body)});
     });
 
     // GET is intentional: visibility changes may freeze a mobile browser immediately,
@@ -388,6 +406,7 @@ async function exit() {
     clientStates.clear();
     handledRequests.clear();
     generationResults.clear();
+    probeResults.clear();
     unmarkedGenerationAt = 0;
     unmarkedGenerationType = '';
     lastCompanionCheck = { checkedAt: 0, installed: false };

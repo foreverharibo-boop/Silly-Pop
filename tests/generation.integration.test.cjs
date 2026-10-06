@@ -102,6 +102,16 @@ async function generate(client,payload) {
     await client.sandbox.testApi.checkCompanion();
     await Promise.all([...requests]);
 
+    // Probe metadata and response observation without AI or Android notifications.
+    await client.sandbox.testApi.checkCompanion(true);
+    assert.match((await status('mobile')).lastProbe.requestId, /^probe-/);
+    assert.equal(notificationCalls().length, 0);
+    assert.equal(pending.length, 0);
+    assert.equal((await status('another-client')).lastProbe, null);
+    assert.equal((await status('mobile')).unmarkedGenerationAt, 0);
+    await fetch(`${baseUrl}/api/backends/text-completions/generate`, {method:'OPTIONS'});
+    assert.equal((await status('mobile')).unmarkedGenerationAt, 0, 'preflight is not a generation');
+
     // Real HTTP + SSE completion, while the browser has moved to Termux and stops
     // running callbacks. Deliberately deliver the old foreground update last.
     client.events.get('started')('normal',{},false);

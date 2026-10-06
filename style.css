@@ -124,6 +124,16 @@
     overflow: auto;
 }
 
+#st_response_notifier_settings .st-rn-generation-diagnostics {
+    font-size: 0.85em;
+    margin: 0.4rem 0;
+}
+
+#st_response_notifier_settings .st-rn-generation-diagnostic {
+    max-height: none;
+    font-size: 0.85em;
+}
+
 @media (max-width: 700px) {
     #st_response_notifier_settings .st-rn-permission-card {
         align-items: flex-start;

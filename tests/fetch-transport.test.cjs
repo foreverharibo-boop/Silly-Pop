@@ -13,7 +13,7 @@ const sandbox={console,URL,URLSearchParams,Request,Headers,AbortSignal,Date,Math
 sandbox.globalThis=sandbox;
 const source=fs.readFileSync(path.join(__dirname,'../index.js'),'utf8');
 vm.runInNewContext(source.replaceAll('import.meta.url',JSON.stringify('https://local.test/extensions/silly-pop/index.js'))+
-    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted};',sandbox);
+    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,diagnosticEvents,traceGeneration};',sandbox);
 const endpoint='https://local.test/api/backends/chat-completions/generate';
 const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers).get('X-Silly-Pop')));
 (async()=>{
@@ -31,6 +31,9 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     assert(!headers['X-Silly-Pop'],'caller headers must not be mutated');
     assert.equal(new Headers(call.init.headers).get('X-CSRF-Token'),'unchanged');
     assert.equal(markerOf(call).characterName,'한글 이름');
+    assert.match(sandbox.testApi.diagnosticEvents.at(-1), /알림 헤더 추가 \(normal\)/);
+    assert(!JSON.stringify(sandbox.testApi.diagnosticEvents).includes('do not change me'));
+    assert(!JSON.stringify(sandbox.testApi.diagnosticEvents).includes('unchanged'));
 
     // Request input and init overrides must preserve the original body stream.
     const request=new Request(endpoint,{method:'POST',headers,body});
@@ -57,6 +60,12 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
         assert.equal(calls.length,before+1,'exactly one fetch per request');
         assert.equal(calls.at(-1).init,init,'unrelated/unsupported requests pass through unchanged');
     }
+    assert(sandbox.testApi.diagnosticEvents.some(line=>line.includes('유형·활성 생성 정보 없음')));
+    assert(sandbox.testApi.diagnosticEvents.some(line=>line.includes('알림 제외 (quiet)')));
+    sandbox.testApi.handleGenerationStarted('arbitrary-private-text',{},false);
+    assert(!JSON.stringify(sandbox.testApi.diagnosticEvents).includes('arbitrary-private-text'));
+    for(let i=0;i<20;i++) sandbox.testApi.traceGeneration('test');
+    assert.equal(sandbox.testApi.diagnosticEvents.length,8);
     sandbox.testApi.handleGenerationStarted('normal',{},false);
     await sandbox.fetch(endpoint,{method:'POST',body:JSON.stringify({messages:[]})});
     assert.equal(markerOf(calls.at(-1)).type,'normal','default main generation can omit type');

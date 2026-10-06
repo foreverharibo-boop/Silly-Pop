@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.2.3';
+const REQUIRED_BRIDGE_VERSION = '2.2.4';
 const MARKER_HEADER = 'X-Silly-Pop';
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
@@ -33,6 +33,59 @@ let lastToast = { key: '', at: 0 };
 const urgentStateImages = new Set();
 const clientId = getClientId();
 let lastStateTimestamp = 0;
+const diagnosticEvents = [];
+let probeDetail = '전송 경로 검사: 연결 확인을 누르면 검사합니다.';
+
+function traceGeneration(detail) {
+    diagnosticEvents.push(`${new Date().toLocaleTimeString()} ${detail}`);
+    if (diagnosticEvents.length > 8) diagnosticEvents.shift();
+    // Diagnostics must never interrupt an AI request or generation event.
+    try { updateGenerationDiagnostic(); } catch { /* A theme may replace this panel. */ }
+}
+
+function diagnosticType(type) {
+    const value = String(type || 'default').toLowerCase();
+    return ['default', 'normal', 'swipe', 'regenerate', 'continue', 'quiet', 'impersonate'].includes(value) ? value : 'other';
+}
+
+function updateGenerationDiagnostic() {
+    const root = document.getElementById?.('st_response_notifier_settings');
+    const output = root?.querySelector('.st-rn-generation-diagnostic');
+    if (!output) return;
+    const context = getContext();
+    const types = context?.eventTypes || context?.event_types;
+    const listeners = context?.eventSource?.events?.[types?.GENERATION_STARTED];
+    const binding = Array.isArray(listeners)
+        ? (listeners.includes(handleGenerationStarted) ? '연결됨' : '연결 안 됨') : '확인 불가';
+    output.textContent = [
+        `요청 감시: ${globalThis.fetch?.__sillyPopTransport ? '연결됨' : '다른 코드가 감싸거나 교체함'}`,
+        `생성 이벤트: ${binding}`,
+        probeDetail,
+        '이 탭의 최근 기록 (새로고침하면 초기화):',
+        ...(diagnosticEvents.length ? diagnosticEvents : ['아직 생성 기록 없음']),
+        ...(companionState.unmarkedDetail ? [companionState.unmarkedDetail] : []),
+    ].join('\n');
+}
+
+async function probeTransport() {
+    const marker = {protocol: COMPANION_PROTOCOL_VERSION, clientId,
+        requestId: `probe-${Date.now()}`, type: 'diagnostic', enabled: false};
+    try {
+        const headers = new Headers(getRequestHeaders());
+        headers.set(MARKER_HEADER, encodeURIComponent(JSON.stringify(marker)));
+        const response = await fetch(`${COMPANION_API}/probe`, {
+            method: 'POST', headers, body: JSON.stringify({silly_pop: marker}),
+            signal: AbortSignal.timeout(8000),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        probeDetail = `검사 요청: 헤더 ${data.header ? '도착' : '누락'} · 본문 ${data.body ? '도착' : '누락'}`;
+        return marker.requestId;
+    } catch (error) {
+        probeDetail = `검사 요청 실패: ${String(error.message).slice(0, 100)}`;
+        return '';
+    }
+}
 
 function nextStateTimestamp() {
     lastStateTimestamp = Math.max(Date.now(), lastStateTimestamp + 1);
@@ -141,6 +194,7 @@ function markGenerationPayload(payload, dryRun = false) {
     const type = payload.type || activeGenerationType;
     if (!isNotifiableGeneration(type)) return;
     payload.silly_pop = makeCompanionMarker(type);
+    traceGeneration(`생성 데이터: 알림 표시 추가 (${diagnosticType(type)})`);
 }
 
 function installRequestHook() {
@@ -154,6 +208,7 @@ function installRequestHook() {
             const method = String(init?.method ?? request?.method ?? 'GET').toUpperCase();
             if (method === 'POST' && url.origin === new URL(globalThis.location.href).origin
                 && GENERATION_PATHS.has(url.pathname)) {
+                let trace = '실제 요청: JSON 본문을 읽을 수 없음';
                 // Inspect only local JSON generation requests. Do not consume the
                 // original Request stream or alter prompts, headers, signals or responses.
                 let body = init?.body;
@@ -166,6 +221,8 @@ function installRequestHook() {
                             && existing.clientId === clientId && existing.requestId ? existing : null;
                         const type = payload.type || payload.params?.type || ownMarker?.type
                             || (generationActive ? activeGenerationType : '');
+                        trace = type ? `실제 요청: 알림 제외 (${diagnosticType(type)})`
+                            : '실제 요청: 유형·활성 생성 정보 없음 → 알림 표시 누락';
                         if (type && isNotifiableGeneration(type)) {
                             const marker = ownMarker || makeCompanionMarker(type);
                             const compact = {...marker, characterName: String(marker.characterName || '').slice(0,80),
@@ -178,11 +235,14 @@ function installRequestHook() {
                             const headers = new Headers(init?.headers ?? request?.headers);
                             headers.set(MARKER_HEADER, encoded);
                             outgoing = {...init, headers};
+                            trace = `실제 요청: 알림 헤더 추가 (${diagnosticType(type)})`;
                         }
                     }
                 }
+                traceGeneration(trace);
             }
         } catch {
+            traceGeneration('실제 요청: 알림 표시 처리 오류');
             // Notification metadata must never block or retry the AI request.
             console.warn('[Silly-Pop] 요청 표시를 추가하지 못해 원래 요청을 그대로 보냅니다.');
         }
@@ -193,6 +253,7 @@ function installRequestHook() {
 }
 
 function handleGenerationStarted(type, _params, dryRun = false) {
+    if (!dryRun) traceGeneration(`생성 시작: ${diagnosticType(type)}${isNotifiableGeneration(type) ? '' : ' (알림 제외)'}`);
     if (dryRun || !isNotifiableGeneration(type)) return;
     generationActive = true;
     activeGenerationType = String(type || 'normal');
@@ -201,6 +262,7 @@ function handleGenerationStarted(type, _params, dryRun = false) {
 }
 
 function handleGenerationEnded() {
+    traceGeneration('생성 종료 이벤트');
     generationActive = false;
     activeGenerationType = '';
     void sendCompanionState();
@@ -223,12 +285,13 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.3 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.4.4 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
-    const diagnostic = root.querySelector('.st-rn-diagnostic');
+    const diagnostic = root.querySelector('.st-rn-server-diagnostic');
     diagnostic.hidden = !companionState.diagnostic;
     diagnostic.textContent = companionState.diagnostic || '';
+    updateGenerationDiagnostic();
 }
 
 function needsBridgeUpdate(version) {
@@ -246,12 +309,16 @@ async function checkCompanion(force = false) {
     if (companionCheckPromise) return companionCheckPromise;
     companionCheckPromise = (async () => {
         try {
+            const probeId = force ? await probeTransport() : '';
             const statusQuery = new URLSearchParams({clientId, ...(force ? {refresh:'1'} : {})});
             const response = await fetch(`${COMPANION_API}/status?${statusQuery}`, {
                 cache: 'no-store', signal: AbortSignal.timeout(12000),
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
+            if (probeId) probeDetail += data.lastProbe?.requestId === probeId
+                ? ' · 서버 응답 감지 통과 (AI 호출 없음)'
+                : ' · 서버 응답 감지 실패';
             const outdated = needsBridgeUpdate(data.version);
             const allowed = data.notificationAllowed !== false;
             companionState = {
@@ -261,10 +328,11 @@ async function checkCompanion(force = false) {
                 appVersion: String(data.appVersion || ''),
                 dispatchOnly: Boolean(data.dispatchOnly),
                 diagnostic: String(data.diagnostic || ''),
+                unmarkedDetail: data.unmarkedGenerationAt
+                    ? `서버 미표시 요청 (${new Date(data.unmarkedGenerationAt).toLocaleTimeString()}): ${diagnosticType(data.unmarkedGenerationType)} · 다른 탭/확장 요청일 수도 있음` : '',
                 generationDetail: data.lastGeneration
                     ? `최근 답변 (${new Date(data.lastGeneration.at).toLocaleTimeString()}): ${data.lastGeneration.detail}`
-                    : data.unmarkedGenerationAt ? `최근 답변: 요청의 알림 표시 누락 (유형: ${data.unmarkedGenerationType || '기본'})`
-                        : '최근 답변: 감지 기록 없음',
+                    : '이 탭의 답변: 서버 감지 기록 없음 · 자동 알림 진단 참고',
                 detail: outdated
                     ? `서버 플러그인이 v${data.version || '?'}예요. 서버 플러그인을 v${REQUIRED_BRIDGE_VERSION} 이상으로 업데이트하고 실리태번을 완전히 재시작해 주세요. 웹 확장 업데이트와는 별개예요.`
                     : data.appInstalled && !allowed
@@ -353,7 +421,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.3</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.4</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -363,7 +431,8 @@ function renderSettings() {
                     </div>
                     <div class="st-rn-versions"></div>
                     <div class="st-rn-generation-detail st-rn-note"></div>
-                    <pre class="st-rn-diagnostic" hidden></pre>
+                    <details class="st-rn-generation-diagnostics"><summary>자동 알림 진단</summary><pre class="st-rn-generation-diagnostic st-rn-diagnostic"></pre></details>
+                    <pre class="st-rn-diagnostic st-rn-server-diagnostic" hidden></pre>
                     <label class="st-rn-row" for="st_rn_enabled"><span><b>답변 완료 알림</b><small>AI 답변 생성이 끝나면 알림을 보냅니다.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_background_only"><span><b>다른 앱을 볼 때만</b><small>실리태번을 보고 있을 때는 알림을 생략합니다.</small></span><input id="st_rn_background_only" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_sound"><span><b>알림 소리</b></span><input id="st_rn_sound" type="checkbox" /></label>
@@ -384,6 +453,7 @@ function renderSettings() {
         const button = root.querySelector('#st_rn_server_refresh');
         button.disabled = true;
         const state = await checkCompanion(true);
+        root.querySelector('.st-rn-generation-diagnostics').open = true;
         button.disabled = false;
         toast(state.ready ? 'success' : 'warning', state.detail);
     });
