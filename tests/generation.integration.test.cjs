@@ -312,6 +312,30 @@ async function generate(client,payload) {
     eventless.events.get('rendered')(0);
     await Promise.all([...requests]);
     assert.equal(notificationCalls().length,8,'history and chat loading must stay silent');
+
+    // Real ST rendering path: 100LOG creates a message with no swipe_info, then
+    // addOneMessage -> refreshSwipeButtons -> ensureSwipes -> syncMesToSwipe.
+    // syncMesToSwipe copies message.extra into swipe_info[n].extra. There is NO
+    // swipe_info[n].gen_id on a normal reply; the ID lives in .extra.gen_id.
+    // See SillyTavern public/script.js ensureSwipes() and syncMesToSwipe().
+    const rendered=browser('st-rendered-extra');
+    rendered.context.extensionSettings.response_notifier.backgroundOnly=false;
+    await rendered.sandbox.testApi.checkCompanion();
+    const finalMessage={is_user:false,is_system:false,mes:'final reply',swipes:['final reply'],swipe_id:0,
+        extra:{hundredlog:true,gen_id:Date.now()}};
+    rendered.context.chat=[{is_user:true,mes:'user'},finalMessage];
+    // Capture the shape AFTER ST's rendering normalization, before its event.
+    finalMessage.swipe_info=[{send_date:finalMessage.send_date,gen_started:undefined,gen_finished:undefined,
+        extra:structuredClone(finalMessage.extra)}];
+    assert.equal(finalMessage.swipe_info[0].gen_id,undefined);
+    rendered.events.get('rendered')(1);
+    await until(()=>notificationCalls().length===9,'ST-rendered nested extra.gen_id was ignored');
+    rendered.events.get('rendered')(1);
+    // Both older 100LOG top-level IDs and ST-normalized nested IDs must dedup.
+    finalMessage.swipe_info[0].gen_id=finalMessage.extra.gen_id;
+    rendered.events.get('rendered')(1);
+    await Promise.all([...requests]);
+    assert.equal(notificationCalls().length,9,'normalized and original metadata refer to the same reply');
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, quiet, errors, 100LOG final publication, inSTead reload, cancellation, historical swipes).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();

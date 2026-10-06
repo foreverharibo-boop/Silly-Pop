@@ -70,7 +70,9 @@ function publishedReply(message, index, swipeId = message?.swipe_id ?? 0) {
     if (swipe?.extra?.api === 'inSTead' && swipe.extra.instead_revised && swipe.gen_finished) {
         return { source: 'instead', key: JSON.stringify(['instead', index, swipeId, swipe.gen_started, swipe.gen_finished]) };
     }
-    const generationId = swipe?.extra?.hundredlog ? swipe.gen_id
+    // ST's syncMesToSwipe copies the completion ID into swipe.extra, while
+    // 100LOG's own swipe commit also writes the older top-level swipe.gen_id.
+    const generationId = swipe?.extra?.hundredlog ? (swipe.extra.gen_id ?? swipe.gen_id)
         : swipeId === (message.swipe_id ?? 0) && message.extra?.hundredlog ? message.extra.gen_id : null;
     if (generationId) return { source: 'hundredlog', completedAt: Number(generationId),
         key: JSON.stringify(['hundredlog', index, generationId]) };
@@ -410,7 +412,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.4.6 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.4.7 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -546,7 +548,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.6</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.4.7</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
