@@ -126,7 +126,8 @@ async function generate(client,payload) {
     let releaseStale;
     holdNextState=release=>{releaseStale=release;};
     const stale=client.sandbox.testApi.sendCompanionState();
-    client.windowEvents.get('blur')(); // hasFocus intentionally remains true.
+    client.sandbox.document.visibilityState='hidden';
+    client.pageEvents.get('visibilitychange')(); // hasFocus intentionally remains true.
     await Promise.all([...requests]);
     releaseStale(); await stale;
     stream.response.setHeader('Content-Type','text/event-stream');
@@ -157,6 +158,46 @@ async function generate(client,payload) {
     const foreground=await generate(client,{type:'normal'});
     foreground.response.end('{}'); await (await foreground.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='foreground','foreground suppression missing');
+    // A visible page losing focus (e.g. browser controls) is not another app.
+    client.sandbox.document.hasFocus=()=>false;
+    const focusOnlyPrevious=(await status('mobile')).lastGeneration.at;
+    const focusOnly=await generate(client,{type:'normal'});
+    client.windowEvents.get('blur')();
+    await Promise.all([...requests]);
+    focusOnly.response.end('{}'); await (await focusOnly.result).text();
+    await until(async()=>(await status('mobile')).lastGeneration?.at>focusOnlyPrevious,'focus-only completion missing');
+    assert.equal((await status('mobile')).lastGeneration.reason,'foreground');
+    client.sandbox.document.hasFocus=()=>true;
+
+    // Leave during generation, then return before the response finishes.
+    client.events.get('started')('normal',{},false);
+    const returnedPrevious=(await status('mobile')).lastGeneration.at;
+    const returned=await generate(client,{type:'normal'});
+    client.sandbox.document.visibilityState='hidden';
+    client.pageEvents.get('visibilitychange')();
+    await Promise.all([...requests]);
+    let releaseHidden;
+    holdNextState=release=>{releaseHidden=release;};
+    const delayedHidden=client.sandbox.testApi.sendCompanionState();
+    client.sandbox.document.visibilityState='visible';
+    client.pageEvents.get('visibilitychange')();
+    await Promise.all([...requests]);
+    releaseHidden(); await delayedHidden;
+    returned.response.end('{}'); await (await returned.result).text();
+    await until(async()=>(await status('mobile')).lastGeneration?.at>returnedPrevious,'returned completion missing');
+    assert.equal((await status('mobile')).lastGeneration.reason,'foreground');
+
+    // A restored web app may receive pageshow without a focus event.
+    const restoredPrevious=(await status('mobile')).lastGeneration.at;
+    const restored=await generate(client,{type:'swipe'});
+    client.windowEvents.get('pagehide')();
+    await Promise.all([...requests]);
+    client.windowEvents.get('pageshow')();
+    await Promise.all([...requests]);
+    restored.response.end('{}'); await (await restored.result).text();
+    await until(async()=>(await status('mobile')).lastGeneration?.at>restoredPrevious,'restored completion missing');
+    assert.equal((await status('mobile')).lastGeneration.reason,'foreground');
+    assert.equal(notificationCalls().length,2,'visible, returned, and restored pages must not notify');
     const quiet=await generate(client,{type:'quiet'});
     assert(!captured.at(-1).silly_pop,'hidden generation must not get a notification marker');
     quiet.response.end('{}'); await (await quiet.result).text();
@@ -201,7 +242,8 @@ async function generate(client,payload) {
         };
         const response=await (source==='hundredlog'?traceGeneration(start):generateRevision(start));
         assert.equal(captured.at(-1).silly_pop?.replySource,source,'reply provenance marked before request');
-        reviewed.windowEvents.get('blur')();
+        reviewed.sandbox.document.visibilityState='hidden';
+        reviewed.pageEvents.get('visibilitychange')();
         await Promise.all([...requests]);
         const before=notificationCalls().length;
         response.response.end('{"choices":[{"message":{"content":"reply"}}]}');
@@ -219,6 +261,13 @@ async function generate(client,payload) {
     assert(!captured.at(-1).silly_pop,'auxiliary quiet request must not notify');
     utility.response.end('{}'); await (await utility.result).text();
     assert.equal(notificationCalls().length,5);
+
+    // Opting out of background-only still sends while SillyTavern is visible.
+    client.sandbox.document.visibilityState='visible';
+    client.context.extensionSettings.response_notifier.backgroundOnly=false;
+    const always=await generate(client,{type:'normal'});
+    always.response.end('{}'); await (await always.result).text();
+    await until(()=>notificationCalls().length===6,'foreground notification should work when background-only is off');
 
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{

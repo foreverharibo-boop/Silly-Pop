@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.1';
+const VERSION = '2.4.2';
 const bridgeAuth = require('./bridge-auth.cjs');
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -245,8 +245,8 @@ function shouldNotify(marker) {
     const visible = state ? state.visible : marker.visibleAtRequest;
     const enabled = state ? state.enabled : marker.enabled;
     const backgroundOnly = state ? state.backgroundOnly : marker.backgroundOnly;
-    const backgrounded = state ? state.backgroundedDuringGeneration : marker.backgroundedDuringGeneration;
-    return enabled && (!backgroundOnly || !visible || backgrounded);
+    // Only the latest visibility matters, not whether this request was ever hidden.
+    return enabled && (!backgroundOnly || !visible);
 }
 
 function isExcludedRequest(marker) {

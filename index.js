@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.3.0';
+const REQUIRED_BRIDGE_VERSION = '2.4.2';
 const MARKER_HEADER = 'X-Silly-Pop';
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
@@ -26,7 +26,6 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 let settings;
 let generationActive = false;
-let backgroundedDuringGeneration = false;
 let activeGenerationType = '';
 let companionState = { installed: false, ready: false, version: '', detail: '확인 중이에요.' };
 let lastToast = { key: '', at: 0 };
@@ -178,7 +177,8 @@ async function retireBrowserNotifications() {
 }
 
 function isPageForeground() {
-    return document.visibilityState === 'visible' && document.hasFocus();
+    // Browser controls and overlays can steal focus while the page stays visible.
+    return document.visibilityState === 'visible';
 }
 
 function isNotifiableGeneration(type) {
@@ -198,7 +198,6 @@ function makeCompanionMarker(type = activeGenerationType) {
         sound: Boolean(settings.sound),
         vibrate: Boolean(settings.vibrate),
         visibleAtRequest: isPageForeground(),
-        backgroundedDuringGeneration: generationActive && backgroundedDuringGeneration,
         url: globalThis.location.href,
         characterName: String(context?.name2 || ''),
     };
@@ -280,7 +279,6 @@ function handleGenerationStarted(type, _params, dryRun = false) {
     if (!isServerReply(type, activeQuietReplySource)) return;
     generationActive = true;
     activeGenerationType = String(type || 'normal');
-    backgroundedDuringGeneration = !isPageForeground();
     void sendCompanionState();
 }
 
@@ -290,12 +288,6 @@ function handleGenerationEnded() {
     activeGenerationType = '';
     activeQuietReplySource = '';
     void sendCompanionState();
-}
-
-function handlePageActivityChange(forceHidden = false) {
-    if (generationActive && (forceHidden || !isPageForeground())) {
-        backgroundedDuringGeneration = true;
-    }
 }
 
 function updateCompanionStatus() {
@@ -309,7 +301,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.0 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.1 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -382,7 +374,6 @@ async function sendCompanionState(urgent = false, forceHidden = false) {
         visible: !forceHidden && isPageForeground() ? '1' : '0',
         enabled: settings.enabled ? '1' : '0',
         backgroundOnly: settings.backgroundOnly ? '1' : '0',
-        backgroundedDuringGeneration: backgroundedDuringGeneration ? '1' : '0',
         sound: settings.sound ? '1' : '0',
         vibrate: settings.vibrate ? '1' : '0',
         url: globalThis.location.href,
@@ -445,7 +436,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.5.0</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.5.1</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -528,20 +519,22 @@ function initialize() {
         context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markGenerationPayload);
     }
     document.addEventListener('visibilitychange', () => {
-        handlePageActivityChange();
         void sendCompanionState(true);
     });
     const sendHiddenState = () => {
-        // During blur/pagehide some mobile browsers still report hasFocus=true.
-        handlePageActivityChange(true);
+        // Lifecycle events can precede the browser updating visibilityState.
         void sendCompanionState(true, true);
     };
-    globalThis.addEventListener('blur', sendHiddenState);
+    globalThis.addEventListener('blur', () => {
+        void sendCompanionState(true);
+    });
     globalThis.addEventListener('pagehide', sendHiddenState);
     document.addEventListener('freeze', sendHiddenState);
+    globalThis.addEventListener('pageshow', () => {
+        void sendCompanionState(true);
+    });
     globalThis.addEventListener('focus', () => {
-        handlePageActivityChange();
-        void sendCompanionState();
+        void sendCompanionState(true);
         void checkCompanion();
     });
 

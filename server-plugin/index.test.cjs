@@ -58,7 +58,7 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.4.1');
+    assert.equal(status.body.version, '2.4.2');
     const headerMarker={protocol:1,requestId:'header-test',clientId:'header-client',type:'normal',characterName:'한글 이름'};
     const headerRequest={headers:{'x-silly-pop':encodeURIComponent(JSON.stringify(headerMarker))},body:{type:'normal'}};
     assert.equal(api.getMarker(headerRequest).characterName,'한글 이름');
@@ -80,6 +80,16 @@ async function run() {
     routes.get.get('/state')({query:{clientId:'reordered',ts:'100',visible:'1',enabled:'1',backgroundOnly:'1',backgroundedDuringGeneration:'0'}}, response());
     assert.equal(api.shouldNotify({clientId:'reordered',enabled:true,type:'normal'}), true,
         'A delayed foreground request must not overwrite the newer background state');
+    routes.get.get('/state')({query:{clientId:'reordered',ts:'300',visible:'1',enabled:'1',backgroundOnly:'1',backgroundedDuringGeneration:'1'}}, response());
+    assert.equal(api.shouldNotify({clientId:'reordered',enabled:true,type:'normal'}), false,
+        'Returning to SillyTavern must suppress notifications even when an old client retains background history');
+    routes.get.get('/state')({query:{clientId:'reordered',ts:'250',visible:'0',enabled:'1',backgroundOnly:'1'}}, response());
+    assert.equal(api.shouldNotify({clientId:'reordered',enabled:true,type:'normal'}), false,
+        'A delayed hidden update must not override a newer return to foreground');
+    assert.equal(api.shouldNotify({clientId:'no-state',enabled:true,type:'normal',backgroundOnly:true,visibleAtRequest:true,backgroundedDuringGeneration:true}), false,
+        'Request history must not override a visible request snapshot');
+    assert.equal(api.shouldNotify({clientId:'no-state',enabled:true,type:'normal',backgroundOnly:false,visibleAtRequest:true}), true,
+        'Disabling background-only still allows foreground notifications');
     const test = response();
     await routes.post.get('/test')({ body: { sound:true, vibrate:true, url:'http://127.0.0.1:8000/' } }, test);
     assert.equal(test.body.ok, true);
