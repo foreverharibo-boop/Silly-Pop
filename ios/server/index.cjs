@@ -76,4 +76,4 @@ async function init(router) {
     restore = observe(core);
     console.log(`[Silly-Pop iOS] ${VERSION} loaded`);
 }
-module.exports = { info: { id: 'silly-pop-ios', name: 'Silly-Pop iOS · 시험판', description: 'Separate Apple Web Push companion; no Android bridge changes' }, init, exit: async () => restore?.(), install, observe, successfulReply };
+module.exports = { info: { id: 'silly-pop-ios', name: 'Silly-Pop iOS', description: 'Separate Apple Web Push companion; no Android bridge changes' }, init, exit: async () => restore?.(), install, observe, successfulReply };

@@ -1,4 +1,4 @@
-import { createMarkerFetch } from './marker.mjs?v=0.1.0-test.1';
+import { createMarkerFetch } from './marker.mjs?v=1.0.0';
 const API = '/api/plugins/silly-pop-ios';
 const PWA = 'https://foreverharibo-boop.github.io/Silly-Pop/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -10,7 +10,7 @@ function initialize() {
     try { settings = { ...settings, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { /* Defaults. */ }
     const original = globalThis.fetch.bind(globalThis);
     const panel = document.createElement('div'); panel.id = 'silly-pop-ios'; panel.className = 'extension_container';
-    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop iOS <small>시험판 0.1.0-test.1</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
+    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop iOS <small>1.0.0</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
     <p data-status role="status">연결 확인을 눌러 주세요.</p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">아이폰 알림 앱</a></div>
     <label>알림 받을 아이폰 <select data-device><option value="">연결된 기기 없음</option></select></label>
     <label class="checkbox_label"><input type="checkbox" data-enabled><span>이 브라우저에서 보낸 답장 알림</span></label>

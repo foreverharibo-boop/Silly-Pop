@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
-const VERSION = '0.1.0-test.1';
+const VERSION = '1.0.0';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -21,7 +21,7 @@ function validateSubscription(value) {
     // A browser-provided endpoint is untrusted input. No arbitrary URLs, local
     // network access, redirects, credentials or non-Apple push services in this trial.
     if (url.protocol !== 'https:' || url.hostname !== 'web.push.apple.com' || url.port || url.username || url.password || url.hash || url.pathname === '/') {
-        throw err(400, '이 시험판은 아이폰의 Apple 웹 푸시 주소만 연결할 수 있어요.');
+        throw err(400, '아이폰의 Apple 웹 푸시 주소만 연결할 수 있어요.');
     }
     const keys = {};
     for (const [name, bytes] of [['auth', 16], ['p256dh', 65]]) {
