@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -61,7 +61,9 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         for (const [k, v] of handled) if (now() - v > 600000) handled.delete(k);
     }
     function status(owner) {
-        return { version: VERSION, devices: devices(owner).map(d => ({ id: d.id, name: d.name })), last: diagnostics.get(ownerKey(owner)) || null };
+        const diagnostic = diagnostics.get(ownerKey(owner));
+        return { version: VERSION, devices: devices(owner).map(d => ({ id: d.id, name: d.name })),
+            last: diagnostic?.last || null, lastTest: diagnostic?.test || null, lastReply: diagnostic?.reply || null };
     }
     function pairStart(owner) {
         prune();
@@ -103,26 +105,45 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         if (!old && states.size >= 1024) throw err(429, '상태 기록 한도입니다.');
         states.set(key, { deviceId: input.deviceId, ts: input.ts, enabled: input.enabled === true, visible: input.visible === true, backgroundOnly: input.backgroundOnly !== false, at: now() });
     }
-    function note(owner, state) { diagnostics.set(ownerKey(owner), { ...state, at: now() }); }
-    async function deliver(owner, deviceId, isTest = false) {
+    function note(owner, state) {
+        const kind = state.kind === 'test' ? 'test' : 'reply';
+        const entry = { ...state, kind, at: now() };
+        const key = ownerKey(owner), previous = diagnostics.get(key) || {};
+        diagnostics.set(key, { ...previous, [kind]: entry, last: entry });
+        // Metadata only: no subscription endpoints, keys or chat content.
+        console.info(`[Silly-Pop iOS] ${kind} ${entry.result}${entry.requestId ? ` (${entry.requestId})` : ''}`);
+    }
+    function recordResponse(owner, marker, result, message) {
+        const requestId = ID.test(marker?.requestId || '') ? marker.requestId.slice(0, 8) : undefined;
+        note(owner, { kind: 'reply', result, message, requestId });
+    }
+    async function deliver(owner, deviceId, isTest = false, requestId) {
+        const kind = isTest ? 'test' : 'reply';
         const device = devices(owner).find(d => d.id === deviceId);
-        if (!device) throw err(404, '연결된 아이폰이 없어요.');
-        if (inFlight >= 16) throw err(429, '알림 전송 대기 한도입니다.');
+        if (!device) {
+            note(owner, { kind, requestId, result: 'failed', message: '연결된 아이폰이 없어요.' });
+            throw err(404, '연결된 아이폰이 없어요.');
+        }
+        if (inFlight >= 16) {
+            note(owner, { kind, requestId, result: 'failed', message: '알림 전송 대기 한도입니다.' });
+            throw err(429, '알림 전송 대기 한도입니다.');
+        }
         inFlight++;
         try {
             await send(device.subscription, JSON.stringify({ v: 1, title: isTest ? 'Silly-Pop 테스트' : '답장이 도착했어요', body: isTest ? '아이폰 알림 연결을 확인했어요.' : '', id: token() }), {
                 vapidDetails: { subject: 'https://github.com/foreverharibo-boop/Silly-Pop', ...data.vapid },
                 TTL: 300, urgency: 'high', timeout: 10000,
             });
-            note(owner, { result: 'accepted', message: 'Apple 알림 서버가 접수했어요. 실제 팝업 수신은 아이폰에서 확인해 주세요.' });
+            note(owner, { kind, requestId, result: 'accepted', message: 'Apple 알림 서버가 접수했어요. 실제 팝업 수신은 기기에서 확인해 주세요.' });
             return { accepted: true };
         } catch (e) {
             if ([404, 410].includes(e.statusCode)) {
                 // Do not remove a newly re-paired subscription after an old send fails.
                 if (devices(owner).find(d => d.id === deviceId)?.subscription.endpoint === device.subscription.endpoint) remove(owner, deviceId);
             }
-            note(owner, { result: 'failed', message: [404, 410].includes(e.statusCode) ? '아이폰 알림 연결이 만료됐어요. 다시 연결해 주세요.' : '알림 전송에 실패했어요. 인터넷 연결과 서버 로그를 확인해 주세요.' });
-            throw err(502, diagnostics.get(ownerKey(owner)).message);
+            const message = [404, 410].includes(e.statusCode) ? '아이폰 알림 연결이 만료됐어요. 다시 연결해 주세요.' : '알림 전송에 실패했어요. 인터넷 연결을 확인해 주세요.';
+            note(owner, { kind, requestId, result: 'failed', message });
+            throw err(502, message);
         } finally { inFlight--; }
     }
     async function test(owner, deviceId) {
@@ -133,20 +154,25 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
     }
     async function completed(owner, marker) {
         prune();
-        if (!marker || marker.v !== 1 || !ID.test(marker.requestId || '') || !ID.test(marker.clientId || '') || !ID.test(marker.deviceId || '') || marker.enabled !== true) return;
+        if (!marker || marker.v !== 1 || !ID.test(marker.requestId || '') || !ID.test(marker.clientId || '') || !ID.test(marker.deviceId || '')) {
+            recordResponse(owner, marker, 'invalid_marker', '생성 요청의 iOS 알림 표시가 올바르지 않아요.');
+            return;
+        }
+        if (marker.enabled !== true) { recordResponse(owner, marker, 'disabled', '요청 시점에 답장 알림이 꺼져 있어 생략했어요.'); return; }
         const key = stateKey(owner, marker.requestId);
         if (handled.has(key)) return;
-        if (handled.size >= 4096) return;
+        if (handled.size >= 4096) { recordResponse(owner, marker, 'tracking_limit', '알림 처리 기록 한도에 도달했어요.'); return; }
         handled.set(key, now());
         const live = states.get(stateKey(owner, marker.clientId));
         const state = live && live.ts >= marker.ts && live.deviceId === marker.deviceId ? live : marker;
         if (state.enabled !== true || (state.backgroundOnly !== false && state.visible !== false)) {
-            note(owner, { result: 'skipped', message: '알림이 꺼져 있거나 실리 화면을 보고 있어 생략했어요.' });
+            recordResponse(owner, marker, 'skipped', state.enabled !== true
+                ? '답장 알림이 꺼져 있어 생략했어요.' : '메시지를 보낸 기기가 실리 화면을 보고 있어 생략했어요.');
             return;
         }
-        try { await deliver(owner, marker.deviceId); }
+        try { await deliver(owner, marker.deviceId, false, marker.requestId.slice(0, 8)); }
         catch { /* Notification failure never cancels generation or recovery. */ }
     }
-    return { status, pairStart, pairFinish, remove, updateState, completed, test };
+    return { status, pairStart, pairFinish, remove, updateState, completed, test, recordResponse };
 }
 module.exports = { createCore, encode, decode, validateSubscription, VERSION };

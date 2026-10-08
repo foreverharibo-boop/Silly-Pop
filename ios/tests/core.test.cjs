@@ -76,4 +76,21 @@ test('pairing cannot transfer another user subscription and failed pushes do not
     await assert.doesNotReject(() => f.core.completed('alice', f.marker(d.id)));
     assert.equal(f.core.status('alice').devices.length, 1);
 });
+test('test push results never replace actual reply diagnostics', async t => {
+    const f = fixture(t), device = f.pair(), marker = f.marker(device.id);
+    f.core.recordResponse('alice', marker, 'unrecognized', 'reply was not recognized');
+    await f.core.test('alice', device.id);
+    let status = f.core.status('alice');
+    assert.equal(status.lastTest.result, 'accepted');
+    assert.equal(status.lastTest.kind, 'test');
+    assert.equal(status.lastReply.result, 'unrecognized');
+    assert.equal(status.lastReply.requestId, marker.requestId.slice(0, 8));
+    await f.core.completed('alice', { ...marker, visible: true, backgroundOnly: false });
+    status = f.core.status('alice');
+    assert.equal(status.lastReply.result, 'accepted');
+    assert.equal(status.lastReply.kind, 'reply');
+    assert.equal(status.lastTest.result, 'accepted');
+    assert.equal(f.sent.length, 2);
+    assert.equal(f.core.status('bob').lastReply, null);
+});
 module.exports = { sub };

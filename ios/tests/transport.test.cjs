@@ -48,6 +48,34 @@ test('reply detection excludes errors, malformed data and reasoning-only output'
     assert.equal(successfulReply('data: {"error":"bad"}\n\ndata: [DONE]\n\n', true), false);
     assert.equal(successfulReply('{"candidates":[{"content":{"parts":[{"text":"think","thought":true},{"text":"reply"}]}}]}', false), true);
 });
+test('headerless ST streaming replies trigger one notification; errors and reasoning alone do not', async t => {
+    const completions = [], restore = observe({ completed: async (...args) => completions.push(args) });
+    t.after(restore);
+    const bodies = [
+        ': heartbeat\n\ndata: {"candidates":[{"content":{"parts":[{"text":"정상 답장"}]}}]}\n\ndata: [DONE]\n\n',
+        'data: {"error":{"message":"failed"}}\n\n',
+        'data: {"candidates":[{"content":{"parts":[{"text":"hidden","thought":true}]}}]}\n\n',
+    ];
+    let current = 0;
+    const server = http.createServer((req, res) => {
+        req.user = { profile: { handle: 'alice' } };
+        req.body = { type: 'normal', stream: true, silly_pop_ios: { requestId: 'headerless' } };
+        // ST's forwardFetchResponse pipes upstream bytes without copying its
+        // Content-Type header. The actual reply is still a valid SSE stream.
+        const bytes = Buffer.from(bodies[current++]);
+        res.write(bytes.subarray(0, 37));
+        res.end(bytes.subarray(37));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.closeAllConnections(); server.close(); });
+    for (const body of bodies) {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}${PATH}`, { method: 'POST' });
+        assert.equal(response.headers.get('content-type'), null);
+        assert.equal(await response.text(), body);
+    }
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0][1].requestId, 'headerless');
+});
 test('control routes require ST authenticated owner and never take an owner from body', async () => {
     const routes = {}, router = { get: (p, h) => routes[p] = h, post: (p, h) => routes[p] = h };
     let received;

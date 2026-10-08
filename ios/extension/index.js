@@ -1,4 +1,4 @@
-import { createMarkerFetch } from './marker.mjs?v=1.0.0';
+import { createMarkerFetch } from './marker.mjs?v=1.0.1';
 const API = '/api/plugins/silly-pop-ios';
 const PWA = 'https://foreverharibo-boop.github.io/Silly-Pop/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -10,8 +10,8 @@ function initialize() {
     try { settings = { ...settings, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { /* Defaults. */ }
     const original = globalThis.fetch.bind(globalThis);
     const panel = document.createElement('div'); panel.id = 'silly-pop-ios'; panel.className = 'extension_container';
-    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop iOS <small>1.0.0</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
-    <p data-status role="status">연결 확인을 눌러 주세요.</p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">아이폰 알림 앱</a></div>
+    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop iOS <small>1.0.1</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
+    <p data-status role="status">연결 확인을 눌러 주세요.</p><p><small data-reply-status>실제 답장: 감지 기록 없음</small><br><small data-test-status>테스트 알림: 기록 없음</small></p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">아이폰 알림 앱</a></div>
     <label>알림 받을 아이폰 <select data-device><option value="">연결된 기기 없음</option></select></label>
     <label class="checkbox_label"><input type="checkbox" data-enabled><span>이 브라우저에서 보낸 답장 알림</span></label>
     <label class="checkbox_label"><input type="checkbox" data-background><span>다른 화면을 볼 때만</span></label>
@@ -39,6 +39,11 @@ function initialize() {
         if (!settings.deviceId) return;
         void original(API + '/state', { method: 'POST', headers: headers(), body: JSON.stringify(snapshot()), keepalive: true }).catch(() => {});
     }
+    function diagnostic(label, entry) {
+        if (!entry) return `${label}: 기록 없음`;
+        const time = Number.isFinite(entry.at) ? new Date(entry.at).toLocaleTimeString() : '';
+        return `${label}${time ? ` (${time})` : ''}: ${entry.message}`;
+    }
     async function check() {
         const result = await api('/status');
         $('device').replaceChildren(new Option('기기를 선택해 주세요', ''), ...result.devices.map(d => new Option(d.name, d.id)));
@@ -46,7 +51,9 @@ function initialize() {
         $('device').value = settings.deviceId;
         $('enabled').checked = settings.enabled;
         $('background').checked = settings.backgroundOnly;
-        say(result.last?.message || `아이폰 서버 ${result.version} 연결됨 · ${result.devices.length}대 연결`);
+        say(`아이폰 서버 ${result.version} 연결됨 · ${result.devices.length}대 연결`);
+        $('reply-status').textContent = diagnostic('실제 답장', result.lastReply);
+        $('test-status').textContent = diagnostic('테스트 알림', result.lastTest);
         state();
     }
     function action(name, fn) { $(name).addEventListener('click', async () => { $(name).disabled = true; try { await fn(); } catch (e) { say(e.message); } finally { $(name).disabled = false; } }); }
@@ -54,7 +61,7 @@ function initialize() {
     action('start', async () => { $('code').value = (await api('/pair/start', {})).code; say('아이폰 알림 앱에 이 코드를 붙여 넣어 주세요. 10분 동안 유효해요.'); });
     action('copy', async () => { $('code').select(); try { await navigator.clipboard.writeText($('code').value); } catch { if (!document.execCommand('copy')) throw new Error('코드를 길게 눌러 직접 복사해 주세요.'); } say('연결 코드를 복사했어요.'); });
     action('finish', async () => { const result = await api('/pair/finish', { code: $('result').value.trim() }); settings.deviceId = result.id; settings.enabled = true; save(); $('result').value = ''; $('code').value = ''; await check(); say('아이폰 연결 완료! 테스트 알림을 눌러 확인해 주세요.'); });
-    action('test', async () => { await api('/test', { id: settings.deviceId }); say('Apple 알림 서버가 접수했어요. 아이폰의 팝업을 확인해 주세요.'); });
+    action('test', async () => { await api('/test', { id: settings.deviceId }); await check(); say('테스트 알림을 Apple 서버가 접수했어요. 기기의 팝업을 확인해 주세요.'); });
     action('remove', async () => { if (!settings.deviceId) return; if (!confirm('선택한 아이폰의 알림 연결을 해제할까요?')) return; await api('/remove', { id: settings.deviceId }); settings.deviceId = ''; settings.enabled = false; save(); await check(); });
     $('device').addEventListener('change', () => { settings.deviceId = $('device').value; if (!settings.deviceId) settings.enabled = false; $('enabled').checked = settings.enabled; save(); state(); });
     for (const [name, key] of [['enabled', 'enabled'], ['background', 'backgroundOnly']]) $(name).addEventListener('change', () => { settings[key] = $(name).checked; if (!settings.deviceId) { settings.enabled = false; $('enabled').checked = false; say('아이폰을 먼저 연결해 주세요.'); } save(); state(); });

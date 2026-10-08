@@ -27,7 +27,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const url=new URL(req.url,'http://localhost'); req.query=Object.fromEntries(url.searchParams);
   if(url.pathname===PATH){
    calls.push(req.body);
-   res.setHeader('content-type',req.body.stream?'text/event-stream':'application/json');
+   if (!req.body.omitContentType) res.setHeader('content-type',req.body.stream?'text/event-stream':'application/json');
    if(req.body.stream) res.write('data: {"choices":[{"delta":{"content":"테스트 답장"}}]}\n\n');
    setTimeout(()=>res.end(req.body.stream?'data: [DONE]\n\n':JSON.stringify({choices:[{message:{content:'테스트 답장'}}]})),40);
    return;
@@ -43,7 +43,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
  const origin=`http://127.0.0.1:${server.address().port}`;
  const headers={'content-type':'application/json'};
  try {
-  for(const order of ['before-relay','after-relay']) for(const stream of [false,true]){
+  for(const order of ['before-relay','after-relay']) for(const mode of ['json','sse','headerless-sse']){
+   const stream = mode !== 'json';
    let lost=false,armed=true;
    const marker={v:1,requestId:id(),clientId:id(),deviceId:id(),enabled:true,visible:false,backgroundOnly:true,ts:Date.now()};
    const wire=async(input,init)=>{
@@ -56,7 +57,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
    if(order==='before-relay') send=createTransport({fetchImpl:createMarkerFetch(wire,{origin,markerFor}),origin,enabled:()=>true,retryDelay:1}).fetch;
    else send=createMarkerFetch(createTransport({fetchImpl:wire,origin,enabled:()=>true,retryDelay:1}).fetch,{origin,markerFor});
    const before=calls.length, notified=completions.length;
-   const response=await send(origin+PATH,{method:'POST',headers,body:JSON.stringify({type:'swipe',stream,messages:[{role:'user',content:'unchanged'}]})});
+   const response=await send(origin+PATH,{method:'POST',headers,body:JSON.stringify({type:'swipe',stream,omitContentType:mode==='headerless-sse',messages:[{role:'user',content:'unchanged'}]})});
    assert.equal(response.status,200); assert.match(await response.text(),/테스트 답장/);
    await pause(10);
    assert.equal(calls.length,before+1,order+' must not duplicate AI requests');
@@ -69,6 +70,6 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   await pause(80); // No browser read or completion callback exists for this request.
   assert.equal(completions.length,before+1);
   assert.equal(completions.at(-1).requestId,'detached');
-  console.log('Relay + iOS integration passed: JSON/SSE, both wrapper orders, lost acknowledgement, one AI request/push, detached browser. Push delivery mocked.');
+  console.log('Relay + iOS integration passed: JSON/SSE/headerless SSE, both wrapper orders, lost acknowledgement, one AI request/push, detached browser. Push delivery mocked.');
  } finally {restore();relay.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;});
