@@ -9,7 +9,8 @@ function ownerOf(request) {
     const owner = request?.user?.profile?.handle;
     return typeof owner === 'string' && owner.length > 0 && owner.length <= 200 ? owner : '';
 }
-function createRemote({directory = path.join(os.homedir(), '.config', 'silly-pop', 'remote'),
+function createRemote({directory = path.join(os.homedir(), '.config', 'silly-pop', 'remote',
+    createHash('sha256').update(path.resolve(process.cwd())).digest('hex')),
     gatewayUrl = config.gatewayUrl, fetcher = globalThis.fetch} = {}) {
     // The destination comes only from the distributor's config, never a pairing
     // code or browser input. Reject redirects to prevent credential leakage.

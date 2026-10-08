@@ -24,9 +24,7 @@ public final class PushService extends FirebaseMessagingService {
             }
             edit.putLong(id, now).commit();
         }
-        String url = context.getSharedPreferences(NotificationHelper.PREFERENCES, MODE_PRIVATE)
-            .getString(NotificationHelper.KEY_LAST_URL, "");
         NotificationHelper.showRemote(context, "test".equals(kind) ? "Silly-Pop PC 테스트" : "답장이 도착했어요",
-            url, !"0".equals(data.get("sound")), !"0".equals(data.get("vibrate")));
+            "", !"0".equals(data.get("sound")), !"0".equals(data.get("vibrate")));
     }
 }

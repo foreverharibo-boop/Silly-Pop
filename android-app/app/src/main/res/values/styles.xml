@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.SillyPop" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.SillyPop.Base" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:statusBarColor">#FFFFFF</item>
         <item name="android:navigationBarColor">#FFFFFF</item>
@@ -7,7 +7,6 @@
         <item name="android:colorAccent">#808080</item>
         <item name="android:windowBackground">#FFFFFF</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
-        <item name="android:forceDarkAllowed">false</item>
     </style>
+    <style name="Theme.SillyPop" parent="Theme.SillyPop.Base" />
 </resources>
