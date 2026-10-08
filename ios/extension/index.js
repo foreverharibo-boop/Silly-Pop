@@ -1,4 +1,4 @@
-import { createMarkerFetch } from './marker.mjs?v=1.0.1';
+import { createMarkerFetch } from './marker.mjs?v=1.0.2';
 const API = '/api/plugins/silly-pop-ios';
 const PWA = 'https://foreverharibo-boop.github.io/Silly-Pop/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -10,7 +10,7 @@ function initialize() {
     try { settings = { ...settings, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { /* Defaults. */ }
     const original = globalThis.fetch.bind(globalThis);
     const panel = document.createElement('div'); panel.id = 'silly-pop-ios'; panel.className = 'extension_container';
-    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop iOS <small>1.0.1</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
+    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop iOS <small>1.0.2</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
     <p data-status role="status">연결 확인을 눌러 주세요.</p><p><small data-reply-status>실제 답장: 감지 기록 없음</small><br><small data-test-status>테스트 알림: 기록 없음</small></p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">아이폰 알림 앱</a></div>
     <label>알림 받을 아이폰 <select data-device><option value="">연결된 기기 없음</option></select></label>
     <label class="checkbox_label"><input type="checkbox" data-enabled><span>이 브라우저에서 보낸 답장 알림</span></label>
@@ -65,20 +65,24 @@ function initialize() {
     action('remove', async () => { if (!settings.deviceId) return; if (!confirm('선택한 아이폰의 알림 연결을 해제할까요?')) return; await api('/remove', { id: settings.deviceId }); settings.deviceId = ''; settings.enabled = false; save(); await check(); });
     $('device').addEventListener('change', () => { settings.deviceId = $('device').value; if (!settings.deviceId) settings.enabled = false; $('enabled').checked = settings.enabled; save(); state(); });
     for (const [name, key] of [['enabled', 'enabled'], ['background', 'backgroundOnly']]) $(name).addEventListener('change', () => { settings[key] = $(name).checked; if (!settings.deviceId) { settings.enabled = false; $('enabled').checked = false; say('아이폰을 먼저 연결해 주세요.'); } save(); state(); });
-    let eligible = false, armed = false;
-    const c = ctx(), events = c?.eventTypes;
-    if (c?.eventSource && events) {
-        const on = (key, fn) => { if (events[key]) c.eventSource.on(events[key], fn); };
-        on('GENERATION_STARTED', (type, options = {}, dry = false) => { eligible = !dry && !options.quietToLoud && [undefined, 'normal', 'regenerate', 'swipe'].includes(type); armed = false; });
-        on('GENERATE_AFTER_DATA', (_data, dry) => { if (eligible && !dry) armed = true; });
-        on('GENERATION_STOPPED', () => { eligible = false; armed = false; });
-        on('GENERATION_ENDED', () => { eligible = false; armed = false; });
-    }
-    globalThis.fetch = createMarkerFetch(original, { origin: location.href, markerFor() {
-        if (!armed || !settings.enabled || !settings.deviceId) return null;
-        armed = false;
+    // Final request data identifies the generation even when nested quiet/dry
+    // generations interrupt the generic lifecycle events. Never use a shared
+    // one-shot "armed" flag to decide whether an outgoing reply is eligible.
+    function markerFor(data) {
+        if (!data || typeof data !== 'object' || Array.isArray(data)
+            || ![undefined, 'normal', 'regenerate', 'swipe'].includes(data.type)
+            || !settings.enabled || !settings.deviceId) return null;
         return { ...snapshot(), requestId: uuid() };
-    } });
+    }
+    const c = ctx(), ready = c?.eventTypes?.CHAT_COMPLETION_SETTINGS_READY;
+    if (c?.eventSource && ready) c.eventSource.on(ready, data => {
+        if (!data || data.silly_pop_ios) return;
+        const marker = markerFor(data);
+        if (marker) data.silly_pop_ios = marker;
+    });
+    // Fallback for direct generation calls and Relay envelopes. The final-data
+    // hook above also covers extensions that captured fetch before we loaded.
+    globalThis.fetch = createMarkerFetch(original, { origin: location.href, markerFor });
     document.addEventListener('visibilitychange', state);
     globalThis.addEventListener('pagehide', () => {
         if (!settings.deviceId) return;
