@@ -77,3 +77,10 @@ test('ambiguous send failures are sanitized and never automatically duplicated',
     assert.equal((await s.gateway.sender(key,'notify',{requestId:'x'})).duplicate,true);
     assert.equal(s.sent.length,1);
 });
+
+test('special object property request IDs are deduplicated safely', async () => {
+    const s = setup(); const key = await s.pair();
+    await s.gateway.sender(key,'notify',{requestId:'__proto__'});
+    assert.equal((await s.gateway.sender(key,'notify',{requestId:'__proto__'})).duplicate,true);
+    assert.equal(s.sent.length,1);
+});

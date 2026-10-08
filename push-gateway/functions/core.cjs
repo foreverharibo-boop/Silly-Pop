@@ -76,7 +76,7 @@ function createGateway({transaction, send, now = Date.now}) {
             const reset = now() - (current.windowAt || 0) >= 3600000;
             const count = reset ? 0 : current.count || 0;
             if (count >= 120 || now() - (current.lastAt || 0) < 2000) fail(429, '알림을 너무 빠르게 요청했어요. 잠시 후 시도해 주세요.');
-            recent[input.requestId] = now();
+            Object.defineProperty(recent, input.requestId, {value: now(), enumerable: true, writable: true, configurable: true});
             tx.set(key, {...current, recent, count: count + 1, windowAt: reset ? now() : current.windowAt, lastAt: now()});
             return {token: current.token};
         });
