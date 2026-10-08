@@ -58,7 +58,13 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.4.2');
+    assert.equal(status.body.version, '2.5.0');
+    for (const [handle, visible] of [['alice','0'], ['bob','1']]) {
+        routes.get.get('/state')({user:{profile:{handle}}, query:{clientId:'shared-client', ts:'100', visible, enabled:'1', backgroundOnly:'1'}}, response());
+    }
+    assert.equal(api.shouldNotify({owner:'alice',clientId:'shared-client',enabled:true,type:'normal'}),true);
+    assert.equal(api.shouldNotify({owner:'bob',clientId:'shared-client',enabled:true,type:'normal'}),false);
+
     const headerMarker={protocol:1,requestId:'header-test',clientId:'header-client',type:'normal',characterName:'한글 이름'};
     const headerRequest={headers:{'x-silly-pop':encodeURIComponent(JSON.stringify(headerMarker))},body:{type:'normal'}};
     assert.equal(api.getMarker(headerRequest).characterName,'한글 이름');

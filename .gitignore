@@ -4,3 +4,6 @@ android-app/local.properties
 android-app/**/build/
 *.jks
 *.keystore
+android-app/app/google-services.json
+push-gateway/.firebaserc
+push-gateway/*debug.log

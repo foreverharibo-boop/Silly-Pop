@@ -9,7 +9,10 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.2';
+const VERSION = '2.5.0';
+const {createRemote, ownerOf} = require('./remote.cjs');
+const remote = createRemote();
+const scoped = (owner, id) => owner ? JSON.stringify([owner, id]) : id;
 const bridgeAuth = require('./bridge-auth.cjs');
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -234,7 +237,7 @@ function pruneState(now = Date.now()) {
 }
 
 function currentState(marker) {
-    const state = clientStates.get(marker.clientId);
+    const state = clientStates.get(scoped(marker.owner, marker.clientId));
     // A state from before this request must not override its visibility snapshot.
     return state && (!marker.stateTs || state.clientTimestamp >= marker.stateTs) ? state : undefined;
 }
@@ -255,15 +258,15 @@ function isExcludedRequest(marker) {
 }
 
 function recordGeneration(marker, reason, detail) {
-    generationResults.set(marker.clientId, {at: Date.now(), reason, detail});
+    generationResults.set(scoped(marker.owner, marker.clientId), {at: Date.now(), reason, detail});
     console.log(`[Silly-Pop] 자동 알림: ${detail}`);
 }
 
 async function handleCompletedResponse(response, marker) {
     const now = Date.now();
     pruneState(now);
-    if (handledRequests.has(marker.requestId)) return;
-    handledRequests.set(marker.requestId, now);
+    if (handledRequests.has(scoped(marker.owner, marker.requestId))) return;
+    handledRequests.set(scoped(marker.owner, marker.requestId), now);
 
     if (isExcludedRequest(marker)) {
         recordGeneration(marker, 'excluded', '숨은 생성 또는 사용자 대필 요청이라 생략');
@@ -284,7 +287,9 @@ async function handleCompletedResponse(response, marker) {
     const characterName = marker.characterName;
     const title = characterName ? `${characterName}의 답장이 도착했어요` : '답장이 도착했어요';
     try {
-        const delivery = await runNotification({
+        const deliver = remote.paired(marker.owner) ? fields => remote.notify(marker.owner, fields) : runNotification;
+        const delivery = await deliver({
+            requestId: marker.requestId,
             title,
             content: 'AI 응답이 도착했어요.',
             sound: state ? state.sound : marker.sound,
@@ -306,12 +311,13 @@ function patchResponseEnd() {
             const pathname = String(request?.originalUrl || request?.url || '').split('?')[0];
             if (request?.method === 'POST' && pathname === '/api/plugins/silly-pop/probe') {
                 const marker = getMarker(request);
-                if (marker) probeResults.set(marker.clientId, {requestId: marker.requestId, at: Date.now()});
+                if (marker) probeResults.set(scoped(ownerOf(request), marker.clientId), {requestId: marker.requestId, at: Date.now()});
                 pruneState();
             }
             if (request?.method === 'POST' && !this.__sillyPopTracked && GENERATION_PATHS.has(pathname)) {
                 const marker = getMarker(request);
                 if (marker) {
+                    marker.owner = ownerOf(request);
                     this.__sillyPopTracked = true;
                     this.once('finish', () => { void handleCompletedResponse(this, marker); });
                 } else if (!['quiet', 'impersonate'].includes(request?.body?.type)) {
@@ -343,16 +349,24 @@ async function init(router) {
     patchResponseEnd();
 
     router.get('/status', async (request, response) => {
-        const status = await checkCompanion(request.query?.refresh === '1');
+        let status;
+        const owner = ownerOf(request);
+        let remotePaired = false;
+        try {
+            remotePaired = remote.paired(owner);
+            status = remotePaired ? await remote.status(owner) : await checkCompanion(request.query?.refresh === '1');
+        } catch (error) { status = {transportReady: false, detail: error.message}; };
         response.json({
             ok: true,
             version: VERSION,
             protocol: PROTOCOL_VERSION,
+            remoteConfigured: remote.configured,
+            remotePaired,
             appInstalled: status.installed,
             bridgeCommand: bridgeCommandExists(),
             appReady: Boolean(status.transportReady && status.notificationAllowed !== false),
-            lastGeneration: generationResults.get(cleanText(request.query?.clientId, 100)) || null,
-            lastProbe: probeResults.get(cleanText(request.query?.clientId, 100)) || null,
+            lastGeneration: generationResults.get(scoped(owner, cleanText(request.query?.clientId, 100))) || null,
+            lastProbe: probeResults.get(scoped(owner, cleanText(request.query?.clientId, 100))) || null,
             unmarkedGenerationAt,
             unmarkedGenerationType,
             ...status,
@@ -379,13 +393,14 @@ async function init(router) {
         const clientId = cleanText(input.clientId, 100);
         if (!clientId) return response.status(400).json({ ok: false, error: 'clientId is required' });
         const clientTimestamp = Number(input.ts) || 0;
-        const previous = clientStates.get(clientId);
+        const stateKey = scoped(ownerOf(request), clientId);
+        const previous = clientStates.get(stateKey);
         // fetch keepalive and the image fallback can arrive late or twice.
         if (previous && (clientTimestamp > 0 || previous.clientTimestamp > 0)
             && clientTimestamp <= previous.clientTimestamp) {
             return response.json({ok: true, stale: true});
         }
-        clientStates.set(clientId, {
+        clientStates.set(stateKey, {
             clientTimestamp,
             visible: booleanValue(input.visible, true),
             enabled: booleanValue(input.enabled, true),
@@ -403,9 +418,23 @@ async function init(router) {
     router.get('/state', updateState);
     router.post('/state', updateState);
 
+    for (const action of ['pair', 'disconnect']) {
+        router.post(`/remote/${action}`, async (request, response) => {
+            const owner = ownerOf(request);
+            if (!owner) return response.status(401).json({ok: false, error: '사용자 인증이 필요해요.'});
+            try {
+                await remote[action](owner, request.body?.code);
+                response.json({ok: true});
+            } catch (error) { response.status(400).json({ok: false, error: error.message}); }
+        });
+    }
+
     router.post('/test', async (request, response) => {
         try {
-            const delivery = await runNotification({
+            const owner = ownerOf(request);
+            const deliver = remote.paired(owner) ? fields => remote.notify(owner, fields) : runNotification;
+            const delivery = await deliver({
+                test: true,
                 title: 'Silly-Pop',
                 content: 'Termux 서버 테스트 알림이에요!',
                 sound: booleanValue(request.body?.sound, true),

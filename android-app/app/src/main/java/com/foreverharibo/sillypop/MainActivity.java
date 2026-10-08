@@ -59,12 +59,56 @@ public final class MainActivity extends Activity {
             .edit().remove("launcher_icon_style").apply();
         NotificationHelper.refreshNotificationIcons(this);
         updatePermissionUi();
+        setupRemote();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         updatePermissionUi();
+        PushSyncWorker.schedule(this);
+    }
+
+    private void setupRemote() {
+        TextView status = findViewById(R.id.remoteStatus);
+        status.setText(!BuildConfig.PUSH_CONFIGURED ? "PC 푸시 설정 전인 개발 빌드예요. 기존 Termux 연결은 사용할 수 있어요."
+            : RemotePush.enabled(this) ? "PC 알림 수신이 켜져 있어요. 실리태번에서 테스트 알림으로 확인해 주세요."
+            : "코드를 실리태번 Silly-Pop 설정에 붙여넣으면 답장 알림만 도착해요. 상시 알림은 없어요.");
+        findViewById(R.id.remotePair).setEnabled(BuildConfig.PUSH_CONFIGURED);
+        findViewById(R.id.remotePair).setOnClickListener(view -> runRemoteAction(true));
+        findViewById(R.id.remoteDisconnect).setOnClickListener(view -> runRemoteAction(false));
+    }
+
+    private void runRemoteAction(boolean pair) {
+        if (pair && !hasNotificationPermission()) { requestNotificationPermission(); return; }
+        findViewById(R.id.remotePair).setEnabled(false);
+        findViewById(R.id.remoteDisconnect).setEnabled(false);
+        ((TextView) findViewById(R.id.remoteStatus)).setText(pair ? "연결 코드를 만들고 있어요…" : "연결을 해제하고 있어요…");
+        new Thread(() -> {
+            String code = null;
+            String error = null;
+            try {
+                if (pair) code = RemotePush.pair(getApplicationContext());
+                else RemotePush.disconnect(getApplicationContext());
+            } catch (Exception exception) { error = "연결 요청에 실패했어요. 인터넷 연결을 확인한 뒤 다시 눌러 주세요."; }
+            final String result = code;
+            final String failure = error;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                setupRemote();
+                findViewById(R.id.remoteDisconnect).setEnabled(true);
+                TextView status = findViewById(R.id.remoteStatus);
+                if (failure != null) { status.setText(failure); return; }
+                if (result != null) {
+                    ClipData clip = ClipData.newPlainText("Silly-Pop PC 연결 코드", result);
+                    PersistableBundle extras = new PersistableBundle();
+                    extras.putBoolean("android.content.extra.IS_SENSITIVE", true);
+                    clip.getDescription().setExtras(extras);
+                    getSystemService(ClipboardManager.class).setPrimaryClip(clip);
+                    status.setText("복사했어요! 10분 안에 실리태번의 Silly-Pop → 컴퓨터 서버 연결에 붙여넣어 주세요. 새 PC를 연결하면 이전 연결은 해제돼요.");
+                } else status.setText("PC 알림 연결을 해제했어요.");
+            });
+        }, "silly-pop-pairing").start();
     }
 
     private void copyPairingCommand() {

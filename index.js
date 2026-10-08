@@ -301,7 +301,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.1 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.6.0 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -335,6 +335,11 @@ async function checkCompanion(force = false) {
             if (probeId) probeDetail += data.lastProbe?.requestId === probeId
                 ? ' · 서버 응답 감지 통과 (AI 호출 없음)'
                 : ' · 서버 응답 감지 실패';
+            const remoteNote = document.getElementById('st_rn_remote_status');
+            if (remoteNote) remoteNote.textContent = data.remotePaired
+                ? '이 실리태번 계정은 PC 푸시로 알림을 보내고 있어요.'
+                : data.remoteConfigured ? '갤럭시 앱에서 PC 연결 코드를 복사해 아래에 붙여넣어 주세요.'
+                    : '이 배포본은 PC 푸시 서버 연결 준비 중이에요. 기존 Termux 알림은 사용할 수 있어요.';
             const outdated = needsBridgeUpdate(data.version);
             const allowed = data.notificationAllowed !== false;
             companionState = {
@@ -359,7 +364,7 @@ async function checkCompanion(force = false) {
             void sendCompanionState();
         } catch (error) {
             companionState = { installed: false, ready: false, version: '', appVersion: '', diagnostic: '',
-                detail: `서버 플러그인에 연결하지 못했어요. 같은 휴대폰의 Termux 서버에 설치·활성화했는지 확인해 주세요. (${error.message})` };
+                detail: `서버 플러그인에 연결하지 못했어요. 실리 서버에 설치·활성화했는지 확인해 주세요. (${error.message})` };
         }
         updateCompanionStatus();
         return companionState;
@@ -436,7 +441,7 @@ function renderSettings() {
         <div id="st_response_notifier_settings" class="extension_container">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.5.1</small></div>
+                    <div class="st-rn-heading"><span class="fa-solid fa-bell"></span><b>Silly-Pop</b><small>v1.6.0</small></div>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -448,12 +453,18 @@ function renderSettings() {
                     <div class="st-rn-generation-detail st-rn-note"></div>
                     <details class="st-rn-generation-diagnostics"><summary>자동 알림 진단</summary><pre class="st-rn-generation-diagnostic st-rn-diagnostic"></pre></details>
                     <pre class="st-rn-diagnostic st-rn-server-diagnostic" hidden></pre>
-                    <label class="st-rn-row" for="st_rn_enabled"><span><b>서버 응답 알림</b><small>Termux에서 AI 응답 수신이 끝나면 알림을 보냅니다. 검수·재작성은 이후에도 이어질 수 있어요.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
+                    <label class="st-rn-row" for="st_rn_enabled"><span><b>서버 응답 알림</b><small>실리 서버에서 AI 응답 수신이 끝나면 알림을 보냅니다. 검수·재작성은 이후에도 이어질 수 있어요.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_background_only"><span><b>다른 앱을 볼 때만</b><small>실리태번을 보고 있을 때는 알림을 생략합니다.</small></span><input id="st_rn_background_only" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_sound"><span><b>알림 소리</b></span><input id="st_rn_sound" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_vibrate"><span><b>진동</b></span><input id="st_rn_vibrate" type="checkbox" /></label>
                     <button id="st_rn_test" class="menu_button st-rn-test" type="button"><span class="fa-solid fa-paper-plane"></span> 테스트 알림 보내기</button>
-                    <div class="st-rn-note">알림은 같은 휴대폰의 Silly-Pop 앱으로만 보냅니다.</div>
+                    <details><summary>컴퓨터 서버 → 갤럭시 연결</summary>
+                        <p id="st_rn_remote_status" class="st-rn-note">연결 상태를 확인하고 있어요.</p>
+                        <input id="st_rn_remote_code" class="text_pole" type="password" placeholder="앱에서 복사한 PC 연결 코드" autocomplete="off" />
+                        <button id="st_rn_remote_pair" class="menu_button" type="button">폰 연결</button>
+                        <button id="st_rn_remote_disconnect" class="menu_button" type="button">PC 연결 해제</button>
+                        <p class="st-rn-note">앱에서 PC 연결 코드를 복사 → 여기에 등록 → 테스트 알림. 폰 한 대에 PC 계정 하나를 연결합니다. 새로 연결하면 이전 연결은 해제됩니다. PC 연결 중에는 Termux 알림 대신 폰으로 푸시를 보냅니다. 대화 내용은 푸시 서버로 보내지 않습니다.</p>
+                    </details>
                 </div>
             </div>
         </div>
@@ -464,6 +475,26 @@ function renderSettings() {
     bindSetting(root, 'st_rn_background_only', 'backgroundOnly');
     bindSetting(root, 'st_rn_sound', 'sound');
     bindSetting(root, 'st_rn_vibrate', 'vibrate');
+    for (const action of ['pair', 'disconnect']) {
+        root.querySelector(`#st_rn_remote_${action}`).addEventListener('click', async event => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            const input = root.querySelector('#st_rn_remote_code');
+            const code = input.value.trim();
+            input.value = '';
+            try {
+                const response = await fetch(`${COMPANION_API}/remote/${action}`, {
+                    method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({code}),
+                    signal: AbortSignal.timeout(15000),
+                });
+                const result = await response.json();
+                if (!response.ok || !result.ok) throw new Error(result.error || '연결 요청에 실패했어요.');
+                toast('success', action === 'pair' ? '폰을 연결했어요. 테스트 알림을 보내 보세요.' : 'PC 연결을 해제했어요.');
+                await checkCompanion(true);
+            } catch (error) { toast('error', error.message); }
+            finally { button.disabled = false; }
+        });
+    }
     root.querySelector('#st_rn_server_refresh').addEventListener('click', async () => {
         const button = root.querySelector('#st_rn_server_refresh');
         button.disabled = true;

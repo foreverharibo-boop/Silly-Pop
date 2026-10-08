@@ -34,7 +34,7 @@
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="18dp" android:gravity="center_vertical" android:orientation="horizontal">
                 <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="서버 연결" android:textSize="14sp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="이 폰의 Termux 연결" android:textSize="14sp" />
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="5dp"
                         android:text="처음 한 번만 Termux에 붙여넣기" android:textSize="11sp" android:tag="secondary" />
                 </LinearLayout>
@@ -42,6 +42,17 @@
                     android:minWidth="0dp" android:minHeight="0dp" android:paddingStart="10dp" android:paddingEnd="10dp"
                     android:text="연결 명령 복사" android:textSize="11sp" android:textAllCaps="false" android:stateListAnimator="@null" />
             </LinearLayout>
+        </LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="18dp" android:layout_marginTop="14dp">
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="컴퓨터 서버 연결" android:textSize="16sp" />
+            <TextView android:id="@+id/remoteStatus" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:textSize="12sp" android:tag="secondary" />
+            <Button android:id="@+id/remotePair" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="PC 연결 코드 복사" android:textAllCaps="false" />
+            <Button android:id="@+id/remoteDisconnect" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="PC 알림 연결 해제" android:textAllCaps="false" />
         </LinearLayout>
         <Button android:id="@+id/testButton" android:layout_width="match_parent" android:layout_height="46dp"
             android:layout_marginTop="14dp" android:minHeight="0dp" android:text="테스트 알림" android:textSize="14sp"
@@ -53,7 +64,7 @@
             <ImageView android:id="@+id/privacyIcon" android:layout_width="16dp" android:layout_height="18dp"
                 android:src="@drawable/ic_privacy" android:contentDescription="개인정보 안내" android:layout_marginEnd="9dp" />
             <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
-                android:text="외부 서버 전송 없음\n파일·연락처·문자 권한 없음" android:tag="secondary" android:textSize="11sp" android:lineSpacingExtra="4dp" />
+                android:text="Termux 연결: 외부 알림 서버를 사용하지 않아요.\nPC 연결: Google 푸시와 알림 서버를 사용해요. 대화 내용은 보내지 않아요.\n파일·연락처·문자 권한 없음" android:tag="secondary" android:textSize="11sp" android:lineSpacingExtra="4dp" />
         </LinearLayout>
         <TextView android:id="@+id/versionFooter" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="28dp"
             android:text="@string/footer" android:tag="secondary" android:textSize="10sp" />

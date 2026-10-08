@@ -75,6 +75,14 @@ public final class NotificationHelper {
     }
 
     public static boolean show(Context context, String title, String url, boolean sound, boolean vibrate) {
+        return show(context, title, url, sound, vibrate, false);
+    }
+
+    static boolean showRemote(Context context, String title, String url, boolean sound, boolean vibrate) {
+        return show(context, title, url, sound, vibrate, true);
+    }
+
+    private static boolean show(Context context, String title, String url, boolean sound, boolean vibrate, boolean remote) {
         createChannels(context);
         if (!canNotify(context)) return false;
         NotificationManager manager = context.getSystemService(NotificationManager.class);
@@ -83,6 +91,7 @@ public final class NotificationHelper {
         NotificationChannel channel = manager.getNotificationChannel(channelId);
         if (channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
         Intent target = createOpenIntent(context, url);
+        if (remote && target == null) target = new Intent(context, MainActivity.class);
         Notification.Builder builder = new Notification.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setLargeIcon(createWhiteIcon(context))

@@ -1,0 +1,4 @@
+{
+  "functions": [{"source": "functions", "codebase": "silly-pop"}],
+  "firestore": {"rules": "firestore.rules"}
+}

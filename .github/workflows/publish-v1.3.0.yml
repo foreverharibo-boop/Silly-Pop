@@ -2,6 +2,11 @@ name: Build Silly-Pop Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish configured and device-tested v1.1.0'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -13,10 +18,19 @@ permissions:
 
 jobs:
   build-android:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore Firebase application config
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.SILLY_POP_GOOGLE_SERVICES_JSON }}
+        run: |
+          test -n "$GOOGLE_SERVICES_JSON"
+          printf '%s' "$GOOGLE_SERVICES_JSON" > android-app/app/google-services.json
+          node -e "const c=require('./remote-config.json'); if(!c.gatewayUrl.startsWith('https://')) process.exit(1)"
 
       - name: Test extension and bridge
         run: npm test
@@ -78,31 +92,29 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v1.0.0.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v1.0.0.apk
+          cp android-app/app/build/outputs/apk/release/app-release.apk Silly-Pop-v1.1.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs Silly-Pop-v1.1.0.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Silly-Pop-v1.0.0
-          path: Silly-Pop-v1.0.0.apk
+          name: Silly-Pop-v1.1.0
+          path: Silly-Pop-v1.1.0.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: Silly-Pop v1.0.0
+          tag_name: v1.1.0
+          name: Silly-Pop v1.1.0
           prerelease: false
           generate_release_notes: false
           body: |
-            실리팝 안드로이드 알림 앱 v1.0.0입니다.
+            기존 Termux 알림에 컴퓨터 서버 → 갤럭시 푸시 연결을 추가합니다.
 
-            - 앱과 Termux의 기기별 연결 키로 알림 요청 인증
-            - 서명 없는 요청, 변조된 요청, 만료·재전송 요청 차단
-            - 화이트 아이콘과 제목만 표시하는 알림 유지
-            - 서버 플러그인 2.4.0 업데이트 및 재시작 필요 (웹 확장 1.5.0 유지)
-            - 앱의 ‘연결 명령 복사’를 눌러 Termux 새 세션에 최초 한 번 붙여넣기
-            - 연결 명령에는 비밀 키가 있으므로 공유 금지, 앱 삭제·데이터 초기화 시 다시 연결
-            - 0.2.1 이상에서 삭제 없이 덮어 설치 가능
-          files: Silly-Pop-v1.0.0.apk
+            - 상시 알림 없이 답장 도착 시에만 알림 표시
+            - 앱에서 PC 연결 코드 복사 → 실리태번 Silly-Pop 설정에 붙여넣기
+            - 기존 Termux 기기별 연결 키와 알림 기능 유지
+            - 서버 플러그인 2.5.0 / 웹 확장 1.6.0 필요
+            - 기존 정식 앱과 같은 서명 키로 업데이트 설치
+          files: Silly-Pop-v1.1.0.apk
