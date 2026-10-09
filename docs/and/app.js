@@ -10,7 +10,7 @@ $('install').addEventListener('click', async () => {
     if (!installPrompt) return;
     const prompt = installPrompt; installPrompt = null; $('install').hidden = true;
     try { await prompt.prompt(); await prompt.userChoice; }
-    catch { message('Chrome 메뉴에서 홈 화면에 추가 → 설치를 선택해 주세요.'); }
+    catch { message('브라우저 메뉴에서 홈 화면에 추가 → 설치를 선택해 주세요.'); }
 });
 const message = text => { $('support').textContent = text; };
 const decode = text => JSON.parse(atob(text.replace(/-/g, '+').replace(/_/g, '/')));
@@ -44,7 +44,7 @@ $('allow').addEventListener('click', async () => {
     try {
         // Call permission immediately in this tap, before any network/registration wait.
         const permission = await Notification.requestPermission();
-        if (permission !== 'granted') throw new Error('Chrome 사이트 설정과 휴대폰 설정에서 Silly-Pop AND 알림을 허용한 뒤 다시 눌러 주세요.');
+        if (permission !== 'granted') throw new Error('브라우저 사이트 설정과 휴대폰 설정에서 Silly-Pop AND 알림을 허용한 뒤 다시 눌러 주세요.');
         let subscription = await registration.pushManager.getSubscription();
         if (subscription && subscription.options.applicationServerKey) {
             const current = new Uint8Array(subscription.options.applicationServerKey), next = keyBytes(config.publicKey);
@@ -55,7 +55,7 @@ $('allow').addEventListener('click', async () => {
         if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(config.publicKey) });
         const endpoint = new URL(subscription.endpoint);
         if (endpoint.origin !== 'https://fcm.googleapis.com' || !/^\/(?:fcm\/send|wp)\/[A-Za-z0-9_:-]+$/.test(endpoint.pathname) || endpoint.search || endpoint.hash) {
-            throw new Error('현재 브라우저의 알림 서비스는 지원하지 않아요. 안드로이드 Chrome에서 설치하고 다시 연결해 주세요.');
+            throw new Error('현재 브라우저의 알림 서비스는 지원하지 않아요. Google 웹 푸시를 지원하는 안드로이드 브라우저로 연결해 주세요.');
         }
         showResult(subscription);
     } catch (e) { message(e.message || '알림 연결을 만들지 못했어요. 다시 시도해 주세요.'); }
@@ -80,7 +80,7 @@ async function init() {
     const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
     if (standalone) $('installation').hidden = true;
     if (ios) { message('이 앱은 안드로이드용이에요. 아이폰에서는 Silly-Pop iOS를 사용해 주세요.'); return; }
-    if (!isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) { message('최신 안드로이드 Chrome에서 HTTPS 주소로 열어 주세요. 앱 안에 내장된 브라우저는 지원하지 않을 수 있어요.'); return; }
+    if (!isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) { message('웹 푸시를 지원하는 안드로이드 브라우저에서 HTTPS 주소로 열어 주세요. 앱 안에 내장된 브라우저는 지원하지 않을 수 있어요.'); return; }
     try {
         // An iOS worker at the parent scope may already control this page.
         // Use this exact registration, never navigator.serviceWorker.ready,

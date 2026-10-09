@@ -28,7 +28,7 @@ async function browser() {
     vm.runInNewContext(fs.readFileSync(require.resolve('../extension/index.js'), 'utf8').replace(/^import .*\n/, ''), sandbox);
     // Allow the initial status fetch to finish before running a generation.
     await new Promise(resolve => setImmediate(resolve));
-    return { calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
+    return { context, calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
         emit: async (key, ...args) => { for (const fn of handlers.get(key) || []) await fn(...args); } };
 }
 test('actual frontend marks final reply despite an intervening dry/quiet generation', async () => {
@@ -76,4 +76,20 @@ test('fetch fallback marks ordinary requests without event ordering and excludes
     await b.emit('CHAT_COMPLETION_SETTINGS_READY', data);
     await b.fetch(PATH, { method: 'POST', body: JSON.stringify(data) });
     assert.equal(JSON.parse(b.calls.at(-1).init.body).silly_pop_ios, undefined);
+});
+
+test('character name is captured with the request and retained after changing chats', async () => {
+    const b = await browser();
+    b.context.name2 = ' 김홍진\n ';
+    const data = { type: 'normal', messages: [] };
+    await b.emit('CHAT_COMPLETION_SETTINGS_READY', data);
+    assert.equal(data.silly_pop_ios.characterName, '김홍진');
+    b.context.name2 = '다른 캐릭터';
+    await b.fetch(PATH, { method: 'POST', body: JSON.stringify(data) });
+    const sent = JSON.parse(b.calls.at(-1).init.body);
+    assert.equal(sent.silly_pop_ios.characterName, '김홍진');
+    b.context.name2 = undefined;
+    const empty = { type: 'normal' };
+    await b.emit('CHAT_COMPLETION_SETTINGS_READY', empty);
+    assert.equal(empty.silly_pop_ios.characterName, '');
 });

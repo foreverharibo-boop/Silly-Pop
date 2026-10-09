@@ -94,3 +94,21 @@ test('test push results never replace actual reply diagnostics', async t => {
     assert.equal(f.core.status('bob').lastReply, null);
 });
 module.exports = { sub };
+
+test('reply push carries the APK title and bounded character name; missing names fall back', async t => {
+    const f = fixture(t), device = f.pair();
+    const cases = [['김홍진', '김홍진'], [undefined, ''], [' \n ', ''], [{ name: 'wrong type' }, ''], ['  김\u0000홍진\n ', '김 홍진'], ['가'.repeat(120), '가'.repeat(80)]];
+    for (let n = 0; n < cases.length; n++) {
+        const [input, expected] = cases[n];
+        await f.core.completed('alice', { ...f.marker(device.id), requestId: (n + 1).toString(16).repeat(32), characterName: input });
+        const payload = JSON.parse(f.sent.at(-1)[1]);
+        assert.equal(payload.title, expected ? `${expected}의 답장이 도착했어요` : '답장이 도착했어요');
+        assert.equal(payload.characterName || '', expected);
+        assert.equal(payload.body, '');
+    }
+    assert.equal(f.sent.length, cases.length);
+    await f.core.test('alice', device.id);
+    const payload = JSON.parse(f.sent.at(-1)[1]);
+    assert.equal(payload.title, 'Silly-Pop 테스트');
+    assert.equal(payload.characterName, undefined);
+});
