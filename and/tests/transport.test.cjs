@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const zlib = require('node:zlib');
 const { observe, successfulReply, install } = require('../server/index.cjs');
 const origin = 'http://localhost:8000';
 const PATH = '/api/backends/chat-completions/generate';
@@ -85,3 +86,73 @@ test('control routes require ST authenticated owner and never take an owner from
     await routes['/status']({ user: { profile: { handle: 'bob' } }, body: { owner: 'alice' } }, response); assert.equal(received, 'bob');
 });
 
+test('compressed non-streaming Vertex/OAI replies are recognized without changing response bytes', async t => {
+    for (const [encoding, compress] of [['gzip', zlib.gzipSync], ['deflate', zlib.deflateSync], ['br', zlib.brotliCompressSync]]) {
+        await t.test(encoding, async t => {
+            let resolveOutcome;
+            const outcome = new Promise(resolve => { resolveOutcome = resolve; });
+            const restore = observe({
+                completed: async () => resolveOutcome('sent'),
+                recordResponse: (_owner, _marker, code) => resolveOutcome(code),
+            });
+            t.after(restore);
+            // ST normalizes non-streaming Vertex replies into this OAI envelope.
+            const body = JSON.stringify({ choices: [{ message: { content: '정상 답변입니다. '.repeat(200) } }] });
+            const bytes = compress(Buffer.from(body));
+            const server = http.createServer((req, res) => {
+                req.user = { profile: { handle: 'alice' } };
+                req.body = { type: 'normal', stream: false, silly_pop_and: { requestId: 'compressed' } };
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Encoding', encoding);
+                res.write(bytes.subarray(0, 11));
+                res.end(bytes.subarray(11));
+            });
+            await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+            t.after(() => { server.closeAllConnections(); server.close(); });
+            const received = await new Promise((resolve, reject) => {
+                http.request({ hostname: '127.0.0.1', port: server.address().port, path: PATH, method: 'POST' }, res => {
+                    const chunks = [];
+                    res.on('data', chunk => chunks.push(chunk));
+                    res.on('end', () => resolve(Buffer.concat(chunks)));
+                }).on('error', reject).end();
+            });
+            assert.deepEqual(received, bytes);
+            assert.equal(await outcome, 'sent');
+        });
+    }
+});
+
+test('compressed errors, corrupt data and oversized decoded responses never notify', async t => {
+    const cases = [
+        ['API error', zlib.gzipSync(Buffer.from('{"error":{"message":"billing disabled"}}')), 'unrecognized'],
+        ['reasoning only', zlib.gzipSync(Buffer.from('{"candidates":[{"content":{"parts":[{"text":"thinking","thought":true}]}}]}')), 'unrecognized'],
+        ['invalid gzip', Buffer.from('not gzip'), 'decode_error'],
+        ['decoded size limit', zlib.gzipSync(Buffer.from(JSON.stringify({ choices: [{ message: { content: 'x'.repeat(2 * 1024 * 1024) } }] }))), 'response_limit'],
+    ];
+    for (const [name, bytes, expected] of cases) {
+        await t.test(name, async t => {
+            let resolveOutcome;
+            const outcome = new Promise(resolve => { resolveOutcome = resolve; });
+            const restore = observe({
+                completed: async () => resolveOutcome('sent'),
+                recordResponse: (_owner, _marker, code) => resolveOutcome(code),
+            });
+            t.after(restore);
+            const server = http.createServer((req, res) => {
+                req.user = { profile: { handle: 'alice' } };
+                req.body = { type: 'normal', silly_pop_and: { requestId: name } };
+                res.setHeader('Content-Encoding', 'gzip');
+                res.end(bytes);
+            });
+            await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+            t.after(() => { server.closeAllConnections(); server.close(); });
+            await new Promise((resolve, reject) => {
+                http.request({ hostname: '127.0.0.1', port: server.address().port, path: PATH, method: 'POST' }, res => {
+                    res.resume();
+                    res.on('end', resolve);
+                }).on('error', reject).end();
+            });
+            assert.equal(await outcome, expected);
+        });
+    }
+});

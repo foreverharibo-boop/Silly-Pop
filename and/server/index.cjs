@@ -3,9 +3,28 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { promisify } = require('node:util');
+const zlib = require('node:zlib');
 const { createCore, VERSION } = require('./core.cjs');
 const PATHS = new Set(['/api/backends/chat-completions/generate']);
 const OBSERVED = Symbol('silly-pop-and-observed');
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const decoders = new Map([
+    ['gzip', promisify(zlib.gunzip)],
+    ['deflate', promisify(zlib.inflate)],
+    ['br', promisify(zlib.brotliDecompress)],
+]);
+async function responseText(bytes, contentEncoding) {
+    const encoding = String(contentEncoding || 'identity').trim().toLowerCase();
+    // ST's compression middleware sends encoded bytes through ServerResponse.
+    // Decode only our captured copy; leave the actual response untouched.
+    if (encoding !== 'identity') {
+        const decode = decoders.get(encoding);
+        if (!decode) throw new Error('Unsupported content encoding');
+        bytes = await decode(bytes, { maxOutputLength: MAX_RESPONSE_BYTES });
+    }
+    return bytes.toString('utf8');
+}
 function successfulReply(raw, sse) {
     try {
         const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
@@ -34,7 +53,7 @@ function observe(core) {
                 const record = { marker, owner, chunks: [], size: 0, overflow: false };
                 res[OBSERVED] = record;
                 res.once('finish', () => {
-                    const raw = record.overflow ? '' : Buffer.concat(record.chunks).toString('utf8');
+                    const bytes = record.overflow ? null : Buffer.concat(record.chunks);
                     record.chunks.length = 0;
                     if (!marker) {
                         report(owner, marker, 'unmarked', '생성 요청에 AND 알림 표시가 없어 보내지 못했어요.');
@@ -42,10 +61,20 @@ function observe(core) {
                         report(owner, marker, 'http_error', `생성 요청 오류로 알림을 보내지 않았어요 (HTTP ${res.statusCode}).`);
                     } else if (record.overflow) {
                         report(owner, marker, 'response_limit', '응답이 알림 판별 크기 한도를 넘어 확인하지 못했어요.');
-                    } else if (successfulReply(raw, String(res.getHeader('content-type') || '').toLowerCase().includes('text/event-stream'))) {
-                        Promise.resolve().then(() => core.completed(owner, marker)).catch(() => {});
                     } else {
-                        report(owner, marker, 'unrecognized', '응답은 끝났지만 정상 답장 본문으로 판별하지 못했어요.');
+                        void responseText(bytes, res.getHeader('content-encoding')).then(raw => {
+                            if (successfulReply(raw, String(res.getHeader('content-type') || '').toLowerCase().includes('text/event-stream'))) {
+                                Promise.resolve().then(() => core.completed(owner, marker)).catch(() => {});
+                            } else {
+                                report(owner, marker, 'unrecognized', '응답은 끝났지만 정상 답장 본문으로 판별하지 못했어요.');
+                            }
+                        }).catch(error => {
+                            if (error.code === 'ERR_BUFFER_TOO_LARGE') {
+                                report(owner, marker, 'response_limit', '압축을 푼 응답이 알림 판별 크기 한도를 넘어 확인하지 못했어요.');
+                            } else {
+                                report(owner, marker, 'decode_error', '응답 압축을 해제하지 못해 답장 알림을 보내지 않았어요.');
+                            }
+                        });
                     }
                 });
                 res.once('close', () => {
@@ -57,7 +86,7 @@ function observe(core) {
             if (!record.marker || record.overflow || chunk == null || typeof chunk === 'function') return;
             const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
             record.size += bytes.length;
-            if (record.size > 2 * 1024 * 1024) { record.overflow = true; record.chunks.length = 0; }
+            if (record.size > MAX_RESPONSE_BYTES) { record.overflow = true; record.chunks.length = 0; }
             else record.chunks.push(bytes);
         } catch { /* Observation must never change the original HTTP response. */ }
     }
@@ -93,4 +122,3 @@ async function init(router) {
     console.log(`[Silly-Pop AND] ${VERSION} loaded`);
 }
 module.exports = { info: { id: 'silly-pop-and', name: 'Silly-Pop AND', description: 'Separate Google Web Push companion; no Android bridge changes' }, init, exit: async () => restore?.(), install, observe, successfulReply };
-
