@@ -1,0 +1,31 @@
+name: Test Silly-Pop AND
+on:
+  push:
+    branches: [and]
+    paths: ['and/**', 'docs/and/**', '.github/workflows/test-and.yml']
+  pull_request:
+    paths: ['and/**', 'docs/and/**', '.github/workflows/test-and.yml']
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: and
+      - run: npm test
+        working-directory: and
+      - run: node and/tests/install.integration.cjs
+      - uses: actions/checkout@v4
+        with:
+          repository: foreverharibo-boop/Silly-Relay
+          ref: de30cd209fbac0d494d325e07542c626b34c8699
+          path: relay-fixture
+      - run: node and/tests/relay.integration.cjs relay-fixture

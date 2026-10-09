@@ -1,26 +1,13 @@
-# Silly-Pop iOS
+# Silly-Pop AND
 
-**1.0.2 · 아이폰용 정식 배포**
+안드로이드 Chrome용 답장 알림 웹앱입니다. **1.0.0 테스트판**으로 갤럭시 실제 수신 확인이 필요합니다.
 
-실리태번 답장이 도착하면 아이폰에 알려주는 홈 화면 웹앱입니다. 채팅은 원래 쓰던 실리 웹앱에서 계속하면 됩니다.
+- [설치·연결 안내](and/README.md): Termux, Windows CMD, macOS
+- [알림 웹앱](https://foreverharibo-boop.github.io/Silly-Pop/and/)
+- [변경 기록](and/CHANGELOG.md)
 
-- **[앱 열기 · Safari에서 홈 화면에 추가](https://foreverharibo-boop.github.io/Silly-Pop/)**
-- **[설치·연결·업데이트 안내](ios/README.md)**
-- [연결 유지·답장 복구: Silly Relay](https://github.com/foreverharibo-boop/Silly-Relay)
-- [갤럭시용 Silly-Pop 배포본](https://github.com/foreverharibo-boop/Silly-Pop/tree/main)
+실리태번 확장 + 서버 플러그인 + 홈 화면 알림 웹앱 구성입니다. 안내의 설치 명령으로 확장과 서버 플러그인을 함께 설치합니다. 화면 밖 생성과 답장 복구는 [Silly Relay](https://github.com/foreverharibo-boop/Silly-Relay)가 별도로 필요합니다.
 
-아이폰 정식 배포는 이 저장소의 `ios` 브랜치에서 관리합니다. 갤럭시용 앱은 `main`에서 별도로 배포합니다. 기존 시험판 사용자의 설치와 앱 주소를 유지하기 위해 `ios-preview`도 같은 정식 배포 내용을 제공합니다.
+이 브랜치의 루트에는 AND 웹 확장이 있습니다. 확장만 설치하면 서버 플러그인은 설치되지 않습니다. 먼저 위 설치 안내를 확인해 주세요.
 
-## 지원 환경
-
-- iOS/iPadOS 16.4 이상, 홈 화면에 추가한 알림 앱
-- 갤럭시 Termux 또는 PC에서 실행 중인 SillyTavern 서버
-- Silly-Pop iOS 서버 플러그인·확장, 백그라운드 생성과 복구용 Silly Relay
-
-일반 답장·재생성·새 스와이프 답장을 서버가 받으면 “답장이 도착했어요”를 보냅니다. 대화 내용·캐릭터명·AI API 키를 푸시에 넣지 않으며, 알림 기능 자체는 AI API를 호출하지 않습니다. 알림을 누르면 이 알림 앱이 열립니다.
-
-제작자의 아이폰 실기기 테스트 후 정식 배포합니다. 다른 서버 환경이나 확장 조합의 오류는 배포글의 문의 달글 또는 본문 댓글로 알려 주세요.
-
-AGPL-3.0-or-later. 기존 소스와 저작권·라이선스 고지를 유지합니다. 설치 전 [전체 안내](ios/README.md)를 확인해 주세요.
-
-이 저장소는 [SillyTavern/SillyTavern-PushNotifications](https://github.com/SillyTavern/SillyTavern-PushNotifications)(Cohee1207)의 포크이며, 모바일·Android 및 iOS 연동은 담은이 추가했습니다. 원본 저작권·AGPL 고지는 그대로 유지합니다.
+기존 Android APK는 `main`, 아이폰 버전은 `ios` 브랜치에서 유지합니다. 이 AND 버전은 기존 APK 업데이트가 아닙니다. AGPL-3.0-or-later 라이선스와 기존 저작권 표기를 유지합니다.
