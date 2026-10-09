@@ -4,7 +4,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const installer = require.resolve('../install.cjs');
+const installerRequire = createRequire(installer);
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'silly-and-installer-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -20,7 +22,7 @@ function fixture(t) {
             assert.equal(args.join(' '), 'ci --omit=dev --ignore-scripts --no-audit --no-fund');
             assert.ok(options.cwd.startsWith(root + path.sep));
             if (failNpm) throw new Error('fixture npm failure');
-        } } : name === 'node:fs' ? { ...fs, ...extra } : require(name),
+        } } : name === 'node:fs' ? { ...fs, ...extra } : installerRequire(name),
     });
     const checkProtected = () => {
         for (const f of protectedFiles) assert.equal(fs.readFileSync(path.join(root, f), 'utf8'), 'preserve');
