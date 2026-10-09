@@ -1,5 +1,5 @@
-const CACHE = 'silly-pop-and-v1.0.0';
-const ASSETS = ['./', './index.html', './app.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-192.png', './icon-512.png', './badge-96.png'];
+const CACHE = 'silly-pop-and-v1.0.1';
+const ASSETS = ['./', './index.html', './app.css', './app.js', './manifest.webmanifest', './icon.svg?v=1.0.1', './icon-180.png?v=1.0.1', './icon-192.png?v=1.0.1', './icon-512.png?v=1.0.1', './badge-96.png?v=1.0.1', './notification-icon-192.png?v=1.0.1'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', event => { event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('silly-pop-and-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', event => {
@@ -13,8 +13,8 @@ self.addEventListener('push', event => {
     const title = data?.title === 'Silly-Pop 테스트' ? data.title : '답장이 도착했어요';
     event.waitUntil(self.registration.showNotification(title, {
         body: title === 'Silly-Pop 테스트' ? '안드로이드 알림 연결을 확인했어요.' : '',
-        icon: new URL('./icon-192.png', self.registration.scope).href,
-        badge: new URL('./badge-96.png', self.registration.scope).href,
+        icon: new URL('./notification-icon-192.png?v=1.0.1', self.registration.scope).href,
+        badge: new URL('./badge-96.png?v=1.0.1', self.registration.scope).href,
         tag: typeof data?.id === 'string' ? data.id.slice(0, 64) : 'silly-pop-reply',
         data: { url: self.registration.scope },
     }));
