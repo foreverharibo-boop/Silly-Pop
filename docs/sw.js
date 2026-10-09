@@ -1,4 +1,4 @@
-const CACHE = 'silly-pop-ios-v1.0.0';
+const CACHE = 'silly-pop-ios-v1.0.3';
 const ASSETS = ['./', './index.html', './app.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-180.png', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', event => { event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('silly-pop-ios-') && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -10,7 +10,9 @@ self.addEventListener('fetch', event => {
 self.addEventListener('push', event => {
     let data;
     try { data = event.data?.json(); } catch { /* Always display an incoming push. */ }
-    const title = data?.title === 'Silly-Pop 테스트' ? data.title : '답장이 도착했어요';
+    const value = data?.characterName;
+    const characterName = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+    const title = data?.title === 'Silly-Pop 테스트' ? data.title : characterName ? `${characterName}의 답장이 도착했어요` : '답장이 도착했어요';
     event.waitUntil(self.registration.showNotification(title, {
         body: title === 'Silly-Pop 테스트' ? '아이폰 알림 연결을 확인했어요.' : '',
         icon: new URL('./icon-192.png', self.registration.scope).href,
