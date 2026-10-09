@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
-const VERSION = '1.0.1';
+const VERSION = '1.0.2';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -19,9 +19,9 @@ function validateSubscription(value) {
     let url;
     try { url = new URL(value.endpoint); } catch { throw err(400, '알림 주소가 올바르지 않아요.'); }
     // A browser-provided endpoint is untrusted input. No arbitrary URLs, local
-    // network access, redirects, credentials or non-Google push services. Only Chrome Web Push endpoints are allowed.
+    // network access, redirects, credentials or non-Google push services. Only Google Web Push endpoints are allowed.
     if (url.protocol !== 'https:' || url.hostname !== 'fcm.googleapis.com' || url.port || url.username || url.password || url.hash || url.search || !/^\/(?:fcm\/send|wp)\/[A-Za-z0-9_:-]+$/.test(url.pathname)) {
-        throw err(400, 'Chrome에서 만든 Google 웹 푸시 주소만 연결할 수 있어요. 안드로이드 Chrome으로 다시 연결해 주세요.');
+        throw err(400, 'Google 웹 푸시를 지원하는 안드로이드 브라우저에서 다시 연결해 주세요.');
     }
     const keys = {};
     for (const [name, bytes] of [['auth', 16], ['p256dh', 65]]) {
@@ -117,7 +117,8 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         const requestId = ID.test(marker?.requestId || '') ? marker.requestId.slice(0, 8) : undefined;
         note(owner, { kind: 'reply', result, message, requestId });
     }
-    async function deliver(owner, deviceId, isTest = false, requestId) {
+    async function deliver(owner, deviceId, isTest = false, requestId, value) {
+        const characterName = isTest ? '' : (typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '');
         const kind = isTest ? 'test' : 'reply';
         const device = devices(owner).find(d => d.id === deviceId);
         if (!device) {
@@ -130,7 +131,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         }
         inFlight++;
         try {
-            await send(device.subscription, JSON.stringify({ v: 1, title: isTest ? 'Silly-Pop 테스트' : '답장이 도착했어요', body: isTest ? '안드로이드 알림 연결을 확인했어요.' : '', id: token() }), {
+            await send(device.subscription, JSON.stringify({ v: 1, title: isTest ? 'Silly-Pop 테스트' : characterName ? `${characterName}의 답장이 도착했어요` : '답장이 도착했어요', ...(characterName ? { characterName } : {}), body: isTest ? '안드로이드 알림 연결을 확인했어요.' : '', id: token() }), {
                 vapidDetails: { subject: 'https://github.com/foreverharibo-boop/Silly-Pop', ...data.vapid },
                 TTL: 300, urgency: 'high', timeout: 10000,
             });
@@ -170,7 +171,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
                 ? '답장 알림이 꺼져 있어 생략했어요.' : '메시지를 보낸 기기가 실리 화면을 보고 있어 생략했어요.');
             return;
         }
-        try { await deliver(owner, marker.deviceId, false, marker.requestId.slice(0, 8)); }
+        try { await deliver(owner, marker.deviceId, false, marker.requestId.slice(0, 8), marker.characterName); }
         catch { /* Notification failure never cancels generation or recovery. */ }
     }
     return { status, pairStart, pairFinish, remove, updateState, completed, test, recordResponse };
