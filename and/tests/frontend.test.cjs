@@ -25,7 +25,7 @@ async function browser() {
             createElement: () => ({ querySelector: element }), querySelector: () => ({ append() {} }), addEventListener() {} },
         Option: function () {}, SillyTavern: { getContext: () => context }, addEventListener() {},
     };
-    vm.runInNewContext(fs.readFileSync(require.resolve('../extension/index.js'), 'utf8').replace(/^import .*\n/, ''), sandbox);
+    vm.runInNewContext(fs.readFileSync(require.resolve('../extension/index.js'), 'utf8').replace(/^import [^\r\n]*\r?\n/, ''), sandbox);
     // Allow the initial status fetch to finish before running a generation.
     await new Promise(resolve => setImmediate(resolve));
     return { calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
