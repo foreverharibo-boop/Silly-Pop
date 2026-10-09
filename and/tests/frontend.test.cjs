@@ -4,9 +4,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const PATH = '/api/backends/chat-completions/generate';
-async function browser() {
+async function browser(options = {}) {
     const { createMarkerFetch } = await import('../extension/marker.mjs');
     const elements = new Map(), handlers = new Map(), calls = [];
+    const domHandlers = new Map(), windowHandlers = new Map();
+    let focused = true;
     const element = key => {
         if (!elements.has(key)) elements.set(key, { addEventListener(name, fn) { this[name] = fn; }, replaceChildren() {} });
         return elements.get(key);
@@ -14,6 +16,10 @@ async function browser() {
     const deviceId = 'd'.repeat(32);
     const wire = async (input, init) => {
         calls.push({ input, init });
+        if (String(input).endsWith('/state')) {
+            if (options.rejectKeepalive && init.keepalive) throw new TypeError('keepalive request rejected');
+            return new Response('{}', { status: options.stateStatus || 200 });
+        }
         return new Response(JSON.stringify(String(input).endsWith('/status') ? { version: 'fixture', devices: [{ id: deviceId, name: 'iPad' }] } : {}));
     };
     const eventTypes = Object.fromEntries(['GENERATION_STARTED', 'GENERATE_AFTER_DATA', 'GENERATION_STOPPED', 'GENERATION_ENDED', 'CHAT_COMPLETION_SETTINGS_READY'].map(k => [k, k]));
@@ -21,14 +27,18 @@ async function browser() {
     const sandbox = {
         createMarkerFetch, crypto: webcrypto, fetch: wire, location: { href: 'https://st.test/' },
         localStorage: { getItem: () => JSON.stringify({ enabled: true, backgroundOnly: false, deviceId, clientId: 'c'.repeat(32) }), setItem() {} },
-        document: { readyState: 'complete', visibilityState: 'visible', getElementById: () => null,
-            createElement: () => ({ querySelector: element }), querySelector: () => ({ append() {} }), addEventListener() {} },
-        Option: function () {}, SillyTavern: { getContext: () => context }, addEventListener() {},
+        document: { readyState: 'complete', visibilityState: 'visible', hasFocus: () => focused, getElementById: () => null,
+            createElement: () => ({ querySelector: element }), querySelector: () => ({ append() {} }), addEventListener(name, fn) { domHandlers.set(name, fn); } },
+        Option: function () {}, SillyTavern: { getContext: () => context }, addEventListener(name, fn) { windowHandlers.set(name, fn); },
     };
     vm.runInNewContext(fs.readFileSync(require.resolve('../extension/index.js'), 'utf8').replace(/^import [^\r\n]*\r?\n/, ''), sandbox);
     // Allow the initial status fetch to finish before running a generation.
     await new Promise(resolve => setImmediate(resolve));
     return { calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
+        focus: value => { focused = value; },
+        visibility: value => { sandbox.document.visibilityState = value; },
+        windowEvent: async name => { windowHandlers.get(name)?.(); await new Promise(resolve => setImmediate(resolve)); },
+        domEvent: async name => { domHandlers.get(name)?.(); await new Promise(resolve => setImmediate(resolve)); },
         emit: async (key, ...args) => { for (const fn of handlers.get(key) || []) await fn(...args); } };
 }
 test('actual frontend marks final reply despite an intervening dry/quiet generation', async () => {
@@ -46,6 +56,42 @@ test('actual frontend marks final reply despite an intervening dry/quiet generat
         assert.equal(sent.silly_pop_and?.deviceId, 'd'.repeat(32), interruptedBy);
         assert.deepEqual(sent.messages, data.messages);
     }
+});
+
+test('home/window blur sends background even when visibility remains visible; focus restores foreground', async () => {
+    const b = await browser();
+    const latest = () => JSON.parse(b.calls.filter(c => String(c.input).endsWith('/state')).at(-1).init.body);
+    assert.equal(latest().visible, true);
+    b.focus(false);
+    await b.windowEvent('blur');
+    assert.equal(latest().visible, false);
+    b.focus(true);
+    await b.windowEvent('focus');
+    assert.equal(latest().visible, true);
+    b.visibility('hidden');
+    await b.domEvent('visibilitychange');
+    assert.equal(latest().visible, false);
+});
+
+test('tabs with the same saved settings use independent notification client IDs', async () => {
+    const a = await browser(), b = await browser();
+    const marker = async tab => {
+        const data = { type: 'normal' };
+        await tab.emit('CHAT_COMPLETION_SETTINGS_READY', data);
+        return data.silly_pop_and;
+    };
+    assert.notEqual((await marker(a)).clientId, (await marker(b)).clientId);
+});
+
+test('state delivery retries rejected keepalive and displays HTTP failure instead of hiding it', async () => {
+    const retry = await browser({ rejectKeepalive: true });
+    const calls = retry.calls.filter(c => String(c.input).endsWith('/state'));
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].init.keepalive, true);
+    assert.equal(calls[1].init.keepalive, undefined);
+    assert.equal(calls[0].init.body, calls[1].init.body);
+    const rejected = await browser({ stateStatus: 403 });
+    assert.match(rejected.elements.get('[data-state-status]').textContent, /403/);
 });
 test('final payload carries marker through a previously captured fetch; wrapper does not replace it', async () => {
     const b = await browser();

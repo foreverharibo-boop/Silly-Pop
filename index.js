@@ -6,12 +6,15 @@ const uuid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b
 const KEY = 'silly-pop-and-browser-v1';
 function initialize() {
     if (document.getElementById('silly-pop-and')) return;
-    let settings = { enabled: false, backgroundOnly: true, deviceId: '', clientId: uuid() };
+    let settings = { enabled: false, backgroundOnly: true, deviceId: '' };
     try { settings = { ...settings, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { /* Defaults. */ }
+    // Tabs share saved preferences, but must never overwrite each other's visibility.
+    delete settings.clientId;
+    const clientId = uuid();
     const original = globalThis.fetch.bind(globalThis);
     const panel = document.createElement('div'); panel.id = 'silly-pop-and'; panel.className = 'extension_container';
-    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop AND <small>1.0.0</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
-    <p data-status role="status">연결 확인을 눌러 주세요.</p><p><small data-reply-status>실제 답장: 감지 기록 없음</small><br><small data-test-status>테스트 알림: 기록 없음</small></p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">안드로이드 알림 앱</a></div>
+    panel.innerHTML = `<div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Silly-Pop AND <small>1.0.1</small></b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content">
+    <p data-status role="status">연결 확인을 눌러 주세요.</p><p><small data-reply-status>실제 답장: 감지 기록 없음</small><br><small data-test-status>테스트 알림: 기록 없음</small><br><small data-state-status>화면 상태: 확인 전</small></p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">안드로이드 알림 앱</a></div>
     <label>알림 받을 안드로이드 <select data-device><option value="">연결된 기기 없음</option></select></label>
     <label class="checkbox_label"><input type="checkbox" data-enabled><span>이 브라우저에서 보낸 답장 알림</span></label>
     <label class="checkbox_label"><input type="checkbox" data-background><span>다른 화면을 볼 때만</span></label>
@@ -34,10 +37,27 @@ function initialize() {
     }
     let lastTs = 0;
     const timestamp = () => lastTs = Math.max(Date.now(), lastTs + 1);
-    function snapshot() { return { v: 1, clientId: settings.clientId, deviceId: settings.deviceId, enabled: settings.enabled, backgroundOnly: settings.backgroundOnly, visible: document.visibilityState === 'visible', ts: timestamp() }; }
-    function state() {
+    function foreground() { return document.visibilityState === 'visible' && document.hasFocus?.() !== false; }
+    function snapshot() { return { v: 1, clientId, deviceId: settings.deviceId, enabled: settings.enabled, backgroundOnly: settings.backgroundOnly, visible: foreground(), ts: timestamp() }; }
+    let lastStateRequest = 0;
+    async function state(visible) {
         if (!settings.deviceId) return;
-        void original(API + '/state', { method: 'POST', headers: headers(), body: JSON.stringify(snapshot()), keepalive: true }).catch(() => {});
+        const input = snapshot();
+        if (typeof visible === 'boolean') input.visible = visible;
+        lastStateRequest = input.ts;
+        try {
+            const request = { method: 'POST', headers: headers(), body: JSON.stringify(input) };
+            let response;
+            try { response = await original(API + '/state', { ...request, keepalive: true }); }
+            catch { response = await original(API + '/state', request); }
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(`${error.error || '상태 전송 실패'} (HTTP ${response.status})`);
+            }
+            if (lastStateRequest === input.ts) $('state-status').textContent = `화면 상태: ${input.visible ? '실리 화면 사용 중' : '다른 화면'} · 서버 전달됨`;
+        } catch (error) {
+            if (lastStateRequest === input.ts) $('state-status').textContent = `화면 상태 전송 실패: ${error.message}`;
+        }
     }
     function diagnostic(label, entry) {
         if (!entry) return `${label}: 기록 없음`;
@@ -84,10 +104,10 @@ function initialize() {
     // hook above also covers extensions that captured fetch before we loaded.
     globalThis.fetch = createMarkerFetch(original, { origin: location.href, markerFor });
     document.addEventListener('visibilitychange', state);
-    globalThis.addEventListener('pagehide', () => {
-        if (!settings.deviceId) return;
-        void original(API + '/state', { method: 'POST', headers: headers(), body: JSON.stringify({ ...snapshot(), visible: false }), keepalive: true }).catch(() => {});
-    });
+    // Some mobile browsers lose focus before (or without) changing visibility.
+    globalThis.addEventListener('blur', () => { void state(false); });
+    globalThis.addEventListener('focus', () => { void state(); });
+    globalThis.addEventListener('pagehide', () => { void state(false); });
     globalThis.addEventListener('pageshow', state);
     $('enabled').checked = settings.enabled; $('background').checked = settings.backgroundOnly;
     save(); void check().catch(e => say(e.message));
