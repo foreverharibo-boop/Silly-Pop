@@ -31,6 +31,7 @@ let companionState = { installed: false, ready: false, version: '', detail: '확
 let lastToast = { key: '', at: 0 };
 const urgentStateImages = new Set();
 let lifecycleHidden = false;
+let windowBlurred = false;
 const clientId = getClientId();
 let lastStateTimestamp = 0;
 const diagnosticEvents = [];
@@ -236,10 +237,11 @@ async function retireBrowserNotifications() {
 }
 
 function isPageForeground() {
-    // Browser controls and overlays can steal focus while the page stays visible.
-    // A lifecycle hide remains authoritative until an actual restore event;
-    // generation callbacks must not overwrite it with stale visibilityState.
-    return !lifecycleHidden && document.visibilityState === 'visible';
+    // On an app switch, blur can arrive before visibilitychange/pagehide (or be
+    // the last callback before suspension). Keep that explicit loss of focus
+    // until restoration; late status/generation callbacks must not undo it.
+    return !lifecycleHidden && !windowBlurred && document.visibilityState === 'visible'
+        && (typeof document.hasFocus !== 'function' || document.hasFocus());
 }
 
 function isNotifiableGeneration(type) {
@@ -380,7 +382,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.4 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.5 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -614,12 +616,14 @@ function initialize() {
         void sendCompanionState(true, true);
     };
     globalThis.addEventListener('blur', () => {
+        windowBlurred = true;
         void sendCompanionState(true);
     });
     globalThis.addEventListener('pagehide', sendHiddenState);
     document.addEventListener('freeze', sendHiddenState);
     globalThis.addEventListener('pageshow', () => {
         lifecycleHidden = false;
+        windowBlurred = typeof document.hasFocus === 'function' && !document.hasFocus();
         void sendCompanionState(true);
     });
     document.addEventListener('resume', () => {
@@ -628,6 +632,7 @@ function initialize() {
     });
     globalThis.addEventListener('focus', () => {
         lifecycleHidden = false;
+        windowBlurred = false;
         void sendCompanionState(true);
         void checkCompanion();
     });

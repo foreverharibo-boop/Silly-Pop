@@ -184,12 +184,15 @@ async function nativeGenerate(client,payload) {
     const foreground=await generate(client,{type:'normal'});
     foreground.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await foreground.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='foreground','foreground suppression missing');
-    // A visible page losing focus (e.g. browser controls) is not another app.
+    // A transient blur must not notify if the page regains focus before completion.
     client.sandbox.document.hasFocus=()=>false;
     const focusOnlyPrevious=(await status('mobile')).lastGeneration.at;
     client.events.get('started')('normal',{},false);
     const focusOnly=await generate(client,{type:'normal'});
     client.windowEvents.get('blur')();
+    await Promise.all([...requests]);
+    client.sandbox.document.hasFocus=()=>true;
+    client.windowEvents.get('focus')();
     await Promise.all([...requests]);
     focusOnly.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await focusOnly.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.at>focusOnlyPrevious,'focus-only completion missing');
@@ -366,7 +369,40 @@ async function nativeGenerate(client,payload) {
     await (await restoredAfterFreeze.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='foreground', 'restored page must suppress foreground notifications');
 
-    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
+    // Reproduce app-switch blur preceding (or replacing) visibilitychange. Neither
+    // a late check nor a generation callback may restore a stale visible state.
+    for (const reportsFocus of [true, false]) {
+        client.sandbox.document.visibilityState = 'visible';
+        client.sandbox.document.hasFocus = () => true;
+        client.windowEvents.get('focus')();
+        await Promise.all([...requests]);
+        client.events.get('started')('normal', {}, false);
+        const before = notificationCalls().length;
+        const blurred = await generate(client, {type:'normal'});
+        client.sandbox.document.hasFocus = () => reportsFocus;
+        client.windowEvents.get('blur')();
+        await client.sandbox.testApi.checkCompanion();
+        client.events.get('ended')();
+        await Promise.all([...requests]);
+        blurred.response.end('{"choices":[{"message":{"content":"background reply"}}]}');
+        await (await blurred.result).text();
+        await until(() => notificationCalls().length === before + 1,
+            'blur-only app switch was suppressed using stale visible state');
+        await until(async () => (await status('mobile')).lastGeneration?.reason === 'dispatched',
+            'blur-only notification result missing');
+        client.sandbox.document.hasFocus = () => true;
+        client.windowEvents.get('focus')();
+        await Promise.all([...requests]);
+        client.events.get('started')('normal', {}, false);
+        const returned = await generate(client, {type:'normal'});
+        returned.response.end('{"choices":[{"message":{"content":"foreground reply"}}]}');
+        await (await returned.result).text();
+        await until(async () => (await status('mobile')).lastGeneration?.reason === 'foreground',
+            'returning focus did not restore foreground suppression');
+        assert.equal(notificationCalls().length, before + 1);
+    }
+
+    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur-only app switch, focus return, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();
     await Promise.allSettled([...requests]);
