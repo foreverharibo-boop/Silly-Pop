@@ -324,6 +324,48 @@ async function nativeGenerate(client,payload) {
     await (await nextTurn.result).text();
     await until(()=>notificationCalls().length===8,'next user turn was incorrectly deduplicated');
 
+    // Bind an untyped native request through the actual event data, even when
+    // middleware no longer exposes native function names. A later listener
+    // clones/edits the prompt just like a cooperating prompt extension.
+    const originalPayloadListener = client.events.get('payload');
+    client.events.set('payload', payload => {
+        originalPayloadListener(payload);
+        if (payload.messages) payload.messages = structuredClone(payload.messages);
+    });
+    client.context.extensionSettings.response_notifier.backgroundOnly = true;
+    for (const streaming of [false, true]) {
+        client.sandbox.document.visibilityState = 'visible';
+        client.windowEvents.get('pageshow')();
+        client.events.get('started')('normal', {}, false);
+        const prompt = [{role:'user', content:'native event-bound reply'}];
+        client.events.get('data')({prompt}, false);
+        const before = notificationCalls().length;
+        const helper = await generate(client, {messages:structuredClone(prompt)});
+        assert(!captured.at(-1).silly_pop, 'independent helper must not steal native prompt binding');
+        helper.response.end('{"choices":[{"message":{"content":"helper text"}}]}');
+        await (await helper.result).text();
+        const main = await generate(client, {messages:prompt.filter(Boolean), stream:streaming});
+        assert.equal(captured.at(-1).silly_pop?.type, 'normal', 'native event-bound reply lost its marker');
+        // pagehide/freeze can precede visibilityState becoming hidden. A later
+        // generation callback must not publish stale visible=true over it.
+        if (streaming) client.pageEvents.get('freeze')();
+        else client.windowEvents.get('pagehide')();
+        client.events.get('ended')();
+        await Promise.all([...requests]);
+        if (streaming) {
+            main.response.setHeader('Content-Type','text/event-stream');
+            main.response.end('data: {"choices":[{"delta":{"content":"reply"}}]}\n\ndata: [DONE]\n\n');
+        } else main.response.end('{"choices":[{"message":{"content":"reply"}}]}');
+        await (await main.result).text();
+        await until(()=>notificationCalls().length===before+1, 'lifecycle-hidden main reply was not dispatched exactly once');
+    }
+    client.windowEvents.get('pageshow')();
+    client.events.get('started')('normal', {}, false);
+    const restoredAfterFreeze = await generate(client, {type:'normal'});
+    restoredAfterFreeze.response.end('{"choices":[{"message":{"content":"foreground again"}}]}');
+    await (await restoredAfterFreeze.result).text();
+    await until(async()=>(await status('mobile')).lastGeneration?.reason==='foreground', 'restored page must suppress foreground notifications');
+
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();

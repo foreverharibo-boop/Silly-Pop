@@ -1,11 +1,11 @@
 {
   "name": "silly-pop",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "private": true,
   "description": "Silly-Pop app-only Android notifications and Termux server bridge for SillyTavern",
   "main": "server-plugin/index.cjs",
   "scripts": {
-    "test": "node server-plugin/bridge-auth.test.cjs && node server-plugin/index.test.cjs && node tests/extension.test.cjs && node tests/fetch-transport.test.cjs && node tests/generation.integration.test.cjs && node tests/reply-boundary.integration.test.cjs"
+    "test": "node server-plugin/bridge-auth.test.cjs && node server-plugin/index.test.cjs && node tests/extension.test.cjs && node tests/fetch-transport.test.cjs && node --test tests/reply-event-binding.test.cjs && node tests/generation.integration.test.cjs && node tests/reply-boundary.integration.test.cjs"
   },
   "license": "AGPL-3.0-or-later"
 }

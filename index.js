@@ -30,6 +30,7 @@ let activeGenerationType = '';
 let companionState = { installed: false, ready: false, version: '', detail: '확인 중이에요.' };
 let lastToast = { key: '', at: 0 };
 const urgentStateImages = new Set();
+let lifecycleHidden = false;
 const clientId = getClientId();
 let lastStateTimestamp = 0;
 const diagnosticEvents = [];
@@ -40,6 +41,18 @@ let responseDetail = '서버 응답 알림: 생성 요청 대기';
 
 // These call paths belong to user-requested replies, not quiet memory/translation
 // jobs. Capture only function names locally; never send the stack or prompts.
+function captureNotificationStack() {
+    // Chromium normally keeps ten frames; cooperating extension middleware can
+    // hide the native dispatcher below them. Restore the limit synchronously.
+    const previous = Error.stackTraceLimit;
+    try {
+        if (typeof previous === 'number') Error.stackTraceLimit = Math.max(previous, 64);
+        return new Error().stack || '';
+    } finally {
+        if (typeof previous === 'number') Error.stackTraceLimit = previous;
+    }
+}
+
 function quietReplySource(stack) {
     const names = new Set(String(stack || '').split('\n').map(line =>
         line.match(/^\s*at (?:async )?(?:Object\.)?([\w.$]+)(?:\s|\()/)?.[1]));
@@ -69,10 +82,27 @@ function isNativeReplyRequest(stack) {
         && names[provider + 2] === 'finishGenerating';
 }
 
+function handleGenerationData(payload, dryRun = false) {
+    const frame = generationFrames.at(-1);
+    if (frame && !dryRun && Array.isArray(payload?.prompt)) frame.prompt = payload.prompt;
+    markGenerationPayload(payload, dryRun);
+}
+
+function takeNativePrompt(payload) {
+    const frame = generationFrames.at(-1);
+    if (!frame || !isServerReply(frame.type, frame.source) || !Array.isArray(frame.prompt)
+        || !Array.isArray(payload.messages) || payload.type && payload.type !== frame.type) return false;
+    const messages = frame.prompt.filter(message => message && typeof message === 'object');
+    if (!messages.length || messages.length !== payload.messages.length
+        || !messages.every((message, index) => message === payload.messages[index])) return false;
+    frame.prompt = null;
+    return true;
+}
+
 function markChatCompletionPayload(payload) {
     if (!payload || typeof payload !== 'object') return;
-    const stack = new Error().stack;
-    const nativeReply = isNativeReplyRequest(stack);
+    const stack = captureNotificationStack();
+    const nativeReply = takeNativePrompt(payload) || isNativeReplyRequest(stack);
     if ((!payload.type && !nativeReply)
         || (String(payload.type).toLowerCase() === 'quiet' && !nativeReply && !quietReplySource(stack))) {
         traceGeneration('생성 데이터: 보조·출처 미확인 요청 → 알림 제외');
@@ -207,7 +237,9 @@ async function retireBrowserNotifications() {
 
 function isPageForeground() {
     // Browser controls and overlays can steal focus while the page stays visible.
-    return document.visibilityState === 'visible';
+    // A lifecycle hide remains authoritative until an actual restore event;
+    // generation callbacks must not overwrite it with stale visibilityState.
+    return !lifecycleHidden && document.visibilityState === 'visible';
 }
 
 function isNotifiableGeneration(type) {
@@ -242,7 +274,7 @@ function markGenerationPayload(payload, dryRun = false) {
     if (!payload.type && !generationActive) return;
     const type = payload.type || activeGenerationType;
     const replySource = String(type).toLowerCase() === 'quiet'
-        ? quietReplySource(new Error().stack) || activeQuietReplySource : '';
+        ? quietReplySource(captureNotificationStack()) || activeQuietReplySource : '';
     if (!isServerReply(type, replySource)) return;
     payload.silly_pop = {...makeCompanionMarker(type), replySource};
     responseDetail = `서버 응답 알림: 요청 표시 완료 (${replySource || diagnosticType(type)})`;
@@ -310,7 +342,7 @@ function installRequestHook() {
 function handleGenerationStarted(type, _params, dryRun = false) {
     if (dryRun) return;
     type = String(type || 'normal');
-    const source = type.toLowerCase() === 'quiet' ? quietReplySource(new Error().stack) : '';
+    const source = type.toLowerCase() === 'quiet' ? quietReplySource(captureNotificationStack()) : '';
     // A quiet utility temporarily owns generation events too. It must never
     // inherit the parent's normal type just because it is not notifiable.
     const parent = generationFrames.at(-1);
@@ -348,7 +380,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.3 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.4 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -563,16 +595,22 @@ function initialize() {
         context.eventSource.on(event, () => { generationFrames.length = 0; syncGenerationFrame(); });
     }
     if (eventTypes.GENERATE_AFTER_DATA) {
-        context.eventSource.on(eventTypes.GENERATE_AFTER_DATA, markGenerationPayload);
+        context.eventSource.on(eventTypes.GENERATE_AFTER_DATA, handleGenerationData);
     }
     if (eventTypes.CHAT_COMPLETION_SETTINGS_READY) {
-        context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markChatCompletionPayload);
+        // Capture the native object link before another extension clones the
+        // outgoing messages to edit its own prompts. Keep its edits untouched.
+        if (typeof context.eventSource.makeFirst === 'function') {
+            context.eventSource.makeFirst(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markChatCompletionPayload);
+        } else context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markChatCompletionPayload);
     }
     document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') lifecycleHidden = false;
         void sendCompanionState(true);
     });
     const sendHiddenState = () => {
         // Lifecycle events can precede the browser updating visibilityState.
+        lifecycleHidden = true;
         void sendCompanionState(true, true);
     };
     globalThis.addEventListener('blur', () => {
@@ -581,9 +619,15 @@ function initialize() {
     globalThis.addEventListener('pagehide', sendHiddenState);
     document.addEventListener('freeze', sendHiddenState);
     globalThis.addEventListener('pageshow', () => {
+        lifecycleHidden = false;
+        void sendCompanionState(true);
+    });
+    document.addEventListener('resume', () => {
+        lifecycleHidden = false;
         void sendCompanionState(true);
     });
     globalThis.addEventListener('focus', () => {
+        lifecycleHidden = false;
         void sendCompanionState(true);
         void checkCompanion();
     });
