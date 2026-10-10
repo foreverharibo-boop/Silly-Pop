@@ -40,7 +40,7 @@ try {
         }
         fs.renameSync(path.join(stage, name), target); installed.push(target);
     }
-    console.log('Silly-Pop iOS 1.0.3 설치 완료. 실리 서버를 다시 시작해 주세요.');
+    console.log('Silly-Pop iOS 1.0.4 설치 완료. 실리 서버를 다시 시작해 주세요.');
     console.log('기존 실리팝, 릴레이, 채팅 및 config.yaml은 변경하지 않았습니다.');
     if (backups.length) console.log('이전 버전 백업: ' + backupRoot);
 } catch (e) {
