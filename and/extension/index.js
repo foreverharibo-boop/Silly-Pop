@@ -1,4 +1,4 @@
-import { createMarkerFetch } from './marker.mjs?v=1.0.0';
+import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.3';
 const API = '/api/plugins/silly-pop-and';
 const PWA = 'https://silly-pop.pages.dev/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -37,7 +37,8 @@ function initialize() {
     }
     let lastTs = 0;
     const timestamp = () => lastTs = Math.max(Date.now(), lastTs + 1);
-    function foreground() { return document.visibilityState === 'visible' && document.hasFocus?.() !== false; }
+    let lifecycleHidden = false;
+    function foreground() { return !lifecycleHidden && document.visibilityState === 'visible' && document.hasFocus?.() !== false; }
     function snapshot() { return { v: 1, clientId, deviceId: settings.deviceId, enabled: settings.enabled, backgroundOnly: settings.backgroundOnly, visible: foreground(), ts: timestamp() }; }
     let lastStateRequest = 0;
     async function state(visible) {
@@ -88,29 +89,47 @@ function initialize() {
     // Final request data identifies the generation even when nested quiet/dry
     // generations interrupt the generic lifecycle events. Never use a shared
     // one-shot "armed" flag to decide whether an outgoing reply is eligible.
-    function markerFor(data) {
+    const replies = createReplyBinding();
+    function markerFor(data, confirmed = false) {
         if (!data || typeof data !== 'object' || Array.isArray(data)
             || ![undefined, 'normal', 'regenerate', 'swipe'].includes(data.type)
+            || data.type === undefined && !confirmed
             || !settings.enabled || !settings.deviceId) return null;
         const value = ctx()?.name2 || data.char_name;
         const characterName = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
         return { ...snapshot(), requestId: uuid(), characterName };
     }
-    const c = ctx(), ready = c?.eventTypes?.CHAT_COMPLETION_SETTINGS_READY;
-    if (c?.eventSource && ready) c.eventSource.on(ready, data => {
+    const c = ctx(), events = c?.eventTypes || c?.event_types;
+    function listen(name, handler, first = false) {
+        if (!c?.eventSource || !events?.[name]) return;
+        if (first && typeof c.eventSource.makeFirst === 'function') c.eventSource.makeFirst(events[name], handler);
+        else c.eventSource.on(events[name], handler);
+    }
+    listen('GENERATION_STARTED', replies.started);
+    listen('GENERATE_AFTER_DATA', replies.dataReady);
+    listen('GENERATION_ENDED', replies.ended);
+    listen('GENERATION_STOPPED', replies.clear);
+    listen('CHAT_CHANGED', replies.clear);
+    listen('CHAT_COMPLETION_SETTINGS_READY', data => {
         if (!data || data.silly_pop_and) return;
-        const marker = markerFor(data);
+        const marker = markerFor(data, replies.confirmed(data));
         if (marker) data.silly_pop_and = marker;
-    });
+    }, true);
     // Fallback for direct generation calls and Relay envelopes. The final-data
     // hook above also covers extensions that captured fetch before we loaded.
     globalThis.fetch = createMarkerFetch(original, { origin: location.href, markerFor });
-    document.addEventListener('visibilitychange', state);
-    // Some mobile browsers lose focus before (or without) changing visibility.
-    globalThis.addEventListener('blur', () => { void state(false); });
-    globalThis.addEventListener('focus', () => { void state(); });
-    globalThis.addEventListener('pagehide', () => { void state(false); });
-    globalThis.addEventListener('pageshow', state);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') lifecycleHidden = false;
+        state();
+    });
+    const hidden = () => { lifecycleHidden = true; state(); };
+    const restored = () => { lifecycleHidden = false; state(); };
+    globalThis.addEventListener('pagehide', hidden);
+    document.addEventListener('freeze', hidden);
+    globalThis.addEventListener('pageshow', restored);
+    document.addEventListener('resume', restored);
+    globalThis.addEventListener('focus', restored);
+    globalThis.addEventListener('blur', hidden);
     $('enabled').checked = settings.enabled; $('background').checked = settings.backgroundOnly;
     save(); void check().catch(e => say(e.message));
 }

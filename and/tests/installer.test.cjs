@@ -34,6 +34,7 @@ test('installer targets only AND; update backs up AND and leaves chat/iOS/Relay/
     const f = fixture(t); f.run(); f.run(); f.checkProtected();
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'plugins/Silly-Pop-AND/package.json'))).name, 'silly-pop-and');
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, 'data/default-user/extensions/Silly-Pop-AND/manifest.json'))).display_name, 'Silly-Pop AND');
+    assert.equal(typeof require(path.join(f.root, 'plugins/Silly-Pop-AND/server/reply-response.cjs')).inspectResponse, 'function');
     assert.equal(fs.readdirSync(path.join(f.root, '.silly-pop-and-backups')).length, 1);
 });
 test('dependency failure and mid-install failure roll back without changing existing installations', t => {

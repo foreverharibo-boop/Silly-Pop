@@ -3,41 +3,11 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { promisify } = require('node:util');
-const zlib = require('node:zlib');
 const { createCore, VERSION } = require('./core.cjs');
 const PATHS = new Set(['/api/backends/chat-completions/generate']);
 const OBSERVED = Symbol('silly-pop-and-observed');
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-const decoders = new Map([
-    ['gzip', promisify(zlib.gunzip)],
-    ['deflate', promisify(zlib.inflate)],
-    ['br', promisify(zlib.brotliDecompress)],
-]);
-async function responseText(bytes, contentEncoding) {
-    const encoding = String(contentEncoding || 'identity').trim().toLowerCase();
-    // ST's compression middleware sends encoded bytes through ServerResponse.
-    // Decode only our captured copy; leave the actual response untouched.
-    if (encoding !== 'identity') {
-        const decode = decoders.get(encoding);
-        if (!decode) throw new Error('Unsupported content encoding');
-        bytes = await decode(bytes, { maxOutputLength: MAX_RESPONSE_BYTES });
-    }
-    return bytes.toString('utf8');
-}
-function successfulReply(raw, sse) {
-    try {
-        const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-        // ST may pipe an SSE body without forwarding Content-Type. A valid
-        // data: frame identifies SSE independently of the response header.
-        const streaming = sse || /^data:/m.test(normalized);
-        const parts = streaming ? normalized.split('\n\n').map(e => e.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n')).filter(s => s.trim() && s.trim() !== '[DONE]').map(s => JSON.parse(s)) : [JSON.parse(normalized)];
-        if (!parts.length || parts.some(p => p.error || p.type === 'error' || p.promptFeedback?.blockReason)) return false;
-        return parts.some(p => p.choices?.some(c => c.delta?.content || c.message?.content || c.text)
-            || p.delta?.text || p.content?.some?.(c => c.type === 'text' && c.text)
-            || p.candidates?.some(c => c.content?.parts?.some(t => t.text && !t.thought)));
-    } catch { return false; }
-}
+const { successfulReply, inspectResponse } = require('./reply-response.cjs');
 function observe(core) {
     const previousWrite = http.ServerResponse.prototype.write;
     const previousEnd = http.ServerResponse.prototype.end;
@@ -62,8 +32,8 @@ function observe(core) {
                     } else if (record.overflow) {
                         report(owner, marker, 'response_limit', '응답이 알림 판별 크기 한도를 넘어 확인하지 못했어요.');
                     } else {
-                        void responseText(bytes, res.getHeader('content-encoding')).then(raw => {
-                            if (successfulReply(raw, String(res.getHeader('content-type') || '').toLowerCase().includes('text/event-stream'))) {
+                        void inspectResponse(bytes, res.getHeader('content-encoding'), res.getHeader('content-type')).then(valid => {
+                            if (valid) {
                                 Promise.resolve().then(() => core.completed(owner, marker)).catch(() => {});
                             } else {
                                 report(owner, marker, 'unrecognized', '응답은 끝났지만 정상 답장 본문으로 판별하지 못했어요.');
@@ -84,7 +54,7 @@ function observe(core) {
             }
             const record = res[OBSERVED];
             if (!record.marker || record.overflow || chunk == null || typeof chunk === 'function') return;
-            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
+            const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
             record.size += bytes.length;
             if (record.size > MAX_RESPONSE_BYTES) { record.overflow = true; record.chunks.length = 0; }
             else record.chunks.push(bytes);
