@@ -6,19 +6,7 @@ const os = require('node:os');
 const { createCore, VERSION } = require('./core.cjs');
 const PATHS = new Set(['/api/backends/chat-completions/generate']);
 const OBSERVED = Symbol('silly-pop-ios-observed');
-function successfulReply(raw, sse) {
-    try {
-        const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
-        // ST may pipe an SSE body without forwarding Content-Type. A valid
-        // data: frame identifies SSE independently of the response header.
-        const streaming = sse || /^data:/m.test(normalized);
-        const parts = streaming ? normalized.split('\n\n').map(e => e.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n')).filter(s => s.trim() && s.trim() !== '[DONE]').map(s => JSON.parse(s)) : [JSON.parse(normalized)];
-        if (!parts.length || parts.some(p => p.error || p.type === 'error' || p.promptFeedback?.blockReason)) return false;
-        return parts.some(p => p.choices?.some(c => c.delta?.content || c.message?.content || c.text)
-            || p.delta?.text || p.content?.some?.(c => c.type === 'text' && c.text)
-            || p.candidates?.some(c => c.content?.parts?.some(t => t.text && !t.thought)));
-    } catch { return false; }
-}
+const { successfulReply, inspectResponse } = require('./reply-response.cjs');
 function observe(core) {
     const previousWrite = http.ServerResponse.prototype.write;
     const previousEnd = http.ServerResponse.prototype.end;
@@ -34,7 +22,7 @@ function observe(core) {
                 const record = { marker, owner, chunks: [], size: 0, overflow: false };
                 res[OBSERVED] = record;
                 res.once('finish', () => {
-                    const raw = record.overflow ? '' : Buffer.concat(record.chunks).toString('utf8');
+                    const bytes = record.overflow ? null : Buffer.concat(record.chunks);
                     record.chunks.length = 0;
                     if (!marker) {
                         report(owner, marker, 'unmarked', '생성 요청에 iOS 알림 표시가 없어 보내지 못했어요.');
@@ -42,10 +30,11 @@ function observe(core) {
                         report(owner, marker, 'http_error', `생성 요청 오류로 알림을 보내지 않았어요 (HTTP ${res.statusCode}).`);
                     } else if (record.overflow) {
                         report(owner, marker, 'response_limit', '응답이 알림 판별 크기 한도를 넘어 확인하지 못했어요.');
-                    } else if (successfulReply(raw, String(res.getHeader('content-type') || '').toLowerCase().includes('text/event-stream'))) {
-                        Promise.resolve().then(() => core.completed(owner, marker)).catch(() => {});
                     } else {
-                        report(owner, marker, 'unrecognized', '응답은 끝났지만 정상 답장 본문으로 판별하지 못했어요.');
+                        void inspectResponse(bytes, res.getHeader('content-encoding'), res.getHeader('content-type')).then(valid => {
+                            if (valid) Promise.resolve().then(() => core.completed(owner, marker)).catch(() => {});
+                            else report(owner, marker, 'unrecognized', '응답은 끝났지만 정상 답장 본문으로 판별하지 못했어요.');
+                        }).catch(() => report(owner, marker, 'decode_error', '응답 압축이나 크기 제한 때문에 답장 본문을 확인하지 못했어요.'));
                     }
                 });
                 res.once('close', () => {
@@ -55,7 +44,7 @@ function observe(core) {
             }
             const record = res[OBSERVED];
             if (!record.marker || record.overflow || chunk == null || typeof chunk === 'function') return;
-            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
+            const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
             record.size += bytes.length;
             if (record.size > 2 * 1024 * 1024) { record.overflow = true; record.chunks.length = 0; }
             else record.chunks.push(bytes);
