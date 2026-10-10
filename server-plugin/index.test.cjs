@@ -58,7 +58,7 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.4.2');
+    assert.equal(status.body.version, '2.4.3');
     const headerMarker={protocol:1,requestId:'header-test',clientId:'header-client',type:'normal',characterName:'한글 이름'};
     const headerRequest={headers:{'x-silly-pop':encodeURIComponent(JSON.stringify(headerMarker))},body:{type:'normal'}};
     assert.equal(api.getMarker(headerRequest).characterName,'한글 이름');
@@ -149,3 +149,4 @@ async function run() {
 run().then(() => console.log('Silly-Pop bridge tests passed (command selection, acknowledgement, permissions, diagnostics).'))
     .catch(error => { console.error(error); process.exitCode = 1; })
     .finally(async () => { await plugin.exit(); fs.rmSync(temporary, {recursive:true, force:true}); });
+

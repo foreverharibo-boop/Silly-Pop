@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.4.2';
+const REQUIRED_BRIDGE_VERSION = '2.4.3';
 const MARKER_HEADER = 'X-Silly-Pop';
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
@@ -35,6 +35,7 @@ let lastStateTimestamp = 0;
 const diagnosticEvents = [];
 let probeDetail = '전송 경로 검사: 연결 확인을 누르면 검사합니다.';
 let activeQuietReplySource = '';
+const generationFrames = [];
 let responseDetail = '서버 응답 알림: 생성 요청 대기';
 
 // These call paths belong to user-requested replies, not quiet memory/translation
@@ -187,9 +188,12 @@ function isNotifiableGeneration(type) {
 
 function makeCompanionMarker(type = activeGenerationType) {
     const context = getContext();
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const frame = generationFrames.at(-1);
     return {
         protocol: COMPANION_PROTOCOL_VERSION,
-        requestId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        requestId,
+        generationId: frame?.type === String(type || 'normal') ? frame.generationId : requestId,
         clientId,
         stateTs: nextStateTimestamp(),
         type: String(type || 'normal'),
@@ -236,9 +240,11 @@ function installRequestHook() {
                 if (typeof body === 'string') {
                     const payload = JSON.parse(body);
                     if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-                        const existing = payload.silly_pop || payload.params?.silly_pop;
-                        const ownMarker = existing?.protocol === COMPANION_PROTOCOL_VERSION
-                            && existing.clientId === clientId && existing.requestId ? existing : null;
+                        let headerMarker;
+                        const incomingHeaders = new Headers(init?.headers ?? request?.headers);
+                        try { headerMarker = JSON.parse(decodeURIComponent(incomingHeaders.get(MARKER_HEADER) || '')); } catch { /* No existing marker. */ }
+                        const ownMarker = [headerMarker, payload.silly_pop, payload.params?.silly_pop].find(existing =>
+                            existing?.protocol === COMPANION_PROTOCOL_VERSION && existing.clientId === clientId && existing.requestId);
                         const type = payload.type || payload.params?.type || ownMarker?.type
                             || (generationActive ? activeGenerationType : '');
                         trace = type ? `실제 요청: 알림 제외 (${diagnosticType(type)})`
@@ -274,19 +280,31 @@ function installRequestHook() {
 
 function handleGenerationStarted(type, _params, dryRun = false) {
     if (dryRun) return;
-    activeQuietReplySource = String(type).toLowerCase() === 'quiet' ? quietReplySource(new Error().stack) : '';
-    traceGeneration(`생성 시작: ${diagnosticType(type)}${isServerReply(type, activeQuietReplySource) ? '' : ' (알림 제외)'}`);
-    if (!isServerReply(type, activeQuietReplySource)) return;
-    generationActive = true;
-    activeGenerationType = String(type || 'normal');
+    type = String(type || 'normal');
+    const source = type.toLowerCase() === 'quiet' ? quietReplySource(new Error().stack) : '';
+    // A quiet utility temporarily owns generation events too. It must never
+    // inherit the parent's normal type just because it is not notifiable.
+    const parent = generationFrames.at(-1);
+    if (!['quiet', 'impersonate'].includes(type.toLowerCase())) generationFrames.length = 0;
+    const generationId = source === 'hundredlog' && parent?.generationId
+        ? parent.generationId : globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    generationFrames.push({type, source, generationId});
+    syncGenerationFrame();
+    traceGeneration(`생성 시작: ${diagnosticType(type)}${isServerReply(type, source) ? '' : ' (알림 제외)'}`);
     void sendCompanionState();
+}
+
+function syncGenerationFrame() {
+    const frame = generationFrames.at(-1);
+    activeGenerationType = frame?.type || '';
+    activeQuietReplySource = frame?.source || '';
+    generationActive = Boolean(frame && isServerReply(frame.type, frame.source));
 }
 
 function handleGenerationEnded() {
     traceGeneration('생성 종료 이벤트');
-    generationActive = false;
-    activeGenerationType = '';
-    activeQuietReplySource = '';
+    generationFrames.pop();
+    syncGenerationFrame();
     void sendCompanionState();
 }
 
@@ -301,7 +319,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.1 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.2 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -512,6 +530,9 @@ function initialize() {
     if (eventTypes.GENERATION_ENDED) {
         context.eventSource.on(eventTypes.GENERATION_ENDED, handleGenerationEnded);
     }
+    for (const event of [eventTypes.GENERATION_STOPPED, eventTypes.CHAT_CHANGED].filter(Boolean)) {
+        context.eventSource.on(event, () => { generationFrames.length = 0; syncGenerationFrame(); });
+    }
     if (eventTypes.GENERATE_AFTER_DATA) {
         context.eventSource.on(eventTypes.GENERATE_AFTER_DATA, markGenerationPayload);
     }
@@ -548,3 +569,4 @@ if (document.readyState === 'loading') {
 } else {
     initialize();
 }
+

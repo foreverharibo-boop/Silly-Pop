@@ -13,7 +13,7 @@ const sandbox={console,URL,URLSearchParams,Request,Headers,AbortSignal,Date,Math
 sandbox.globalThis=sandbox;
 const source=fs.readFileSync(path.join(__dirname,'../index.js'),'utf8');
 vm.runInNewContext(source.replaceAll('import.meta.url',JSON.stringify('https://local.test/extensions/silly-pop/index.js'))+
-    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,markGenerationPayload,quietReplySource,diagnosticEvents,traceGeneration};',sandbox);
+    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,handleGenerationEnded,markGenerationPayload,quietReplySource,diagnosticEvents,traceGeneration};',sandbox);
 const endpoint='https://local.test/api/backends/chat-completions/generate';
 const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers).get('X-Silly-Pop')));
 (async()=>{
@@ -61,6 +61,34 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     assert.equal(markerOf(calls.at(-1)).type,'quiet','actual generation type must remain quiet');
     assert.equal(calls.at(-1).init.body,reviewedBody,'notification provenance must not alter prompts');
 
+    // One user generation owns its retries, including nested 100LOG rewrites.
+    sandbox.testApi.handleGenerationStarted('normal',{},false);
+    const firstAttempt={type:'normal'}, retryAttempt={type:'normal'};
+    sandbox.testApi.markGenerationPayload(firstAttempt);
+    sandbox.testApi.markGenerationPayload(retryAttempt);
+    assert.notEqual(firstAttempt.silly_pop.requestId,retryAttempt.silly_pop.requestId);
+    assert.equal(firstAttempt.silly_pop.generationId,retryAttempt.silly_pop.generationId);
+    traceGeneration(()=>sandbox.testApi.handleGenerationStarted('quiet',{},false));
+    const nestedRewrite={type:'quiet'};
+    sandbox.testApi.markGenerationPayload(nestedRewrite);
+    assert.equal(nestedRewrite.silly_pop.generationId,firstAttempt.silly_pop.generationId);
+    sandbox.testApi.handleGenerationEnded();
+    // A utility that omits its type must not borrow the active normal reply type.
+    sandbox.testApi.handleGenerationStarted('quiet',{},false);
+    const auxiliary={messages:[]}; sandbox.testApi.markGenerationPayload(auxiliary);
+    assert(!auxiliary.silly_pop);
+    const auxiliaryOptions={method:'POST',body:JSON.stringify(auxiliary)};
+    await sandbox.fetch(endpoint,auxiliaryOptions);
+    assert.equal(calls.at(-1).init,auxiliaryOptions);
+    sandbox.testApi.handleGenerationEnded();
+    const resumed={}; sandbox.testApi.markGenerationPayload(resumed);
+    assert.equal(resumed.silly_pop.generationId,firstAttempt.silly_pop.generationId);
+    sandbox.testApi.handleGenerationEnded();
+    sandbox.testApi.handleGenerationStarted('normal',{},false);
+    const nextTurn={type:'normal'}; sandbox.testApi.markGenerationPayload(nextTurn);
+    assert.notEqual(nextTurn.silly_pop.generationId,firstAttempt.silly_pop.generationId);
+    sandbox.testApi.handleGenerationEnded();
+
     const cases=[
         ['https://external.test/api/backends/chat-completions/generate',options],
         ['https://local.test/api/other',options],
@@ -102,3 +130,4 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     assert.equal(calls.length,before+1,'AI calls must never be retried by the notification hook');
     console.log('Fetch transport tests passed (eventless requests, same-origin scope, Request bodies, CSRF, aborts, quiet exclusion, no retries).');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

@@ -9,8 +9,9 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.2';
+const VERSION = '2.4.3';
 const bridgeAuth = require('./bridge-auth.cjs');
+const {MAX_RESPONSE_BYTES, inspectResponse} = require('./reply-response.cjs');
 const PROTOCOL_VERSION = 1;
 const CLIENT_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -29,11 +30,14 @@ const GENERATION_PATHS = new Set([
 
 const clientStates = new Map();
 const handledRequests = new Map();
+const handledGenerations = new Map();
 const generationResults = new Map();
 const probeResults = new Map();
 let unmarkedGenerationAt = 0;
 let unmarkedGenerationType = '';
 const originalEnd = http.ServerResponse.prototype.end;
+const originalWrite = http.ServerResponse.prototype.write;
+const OBSERVED = Symbol('silly-pop-response');
 let patched = false;
 let lastCompanionCheck = { checkedAt: 0, installed: false, reason: 'unchecked', detail: '', command: '' };
 let pendingCompanionCheck;
@@ -202,6 +206,7 @@ function getMarker(request) {
     if (!marker.requestId || !marker.clientId) return null;
     return {
         requestId: cleanText(marker.requestId, 100),
+        generationId: cleanText(marker.generationId, 100),
         clientId: cleanText(marker.clientId, 100),
         stateTs: Number(marker.stateTs) || 0,
         enabled: booleanValue(marker.enabled, true),
@@ -224,6 +229,9 @@ function pruneState(now = Date.now()) {
     }
     for (const [id, timestamp] of handledRequests) {
         if (now - timestamp > REQUEST_TTL_MS) handledRequests.delete(id);
+    }
+    for (const [id, timestamp] of handledGenerations) {
+        if (now - timestamp > CLIENT_TTL_MS) handledGenerations.delete(id);
     }
     for (const [id, result] of generationResults) {
         if (now - result.at > CLIENT_TTL_MS) generationResults.delete(id);
@@ -259,11 +267,12 @@ function recordGeneration(marker, reason, detail) {
     console.log(`[Silly-Pop] 자동 알림: ${detail}`);
 }
 
-async function handleCompletedResponse(response, marker) {
+async function handleCompletedResponse(response, marker, record) {
     const now = Date.now();
     pruneState(now);
-    if (handledRequests.has(marker.requestId)) return;
-    handledRequests.set(marker.requestId, now);
+    const requestKey = JSON.stringify([marker.clientId, marker.requestId]);
+    if (handledRequests.has(requestKey)) return;
+    handledRequests.set(requestKey, now);
 
     if (isExcludedRequest(marker)) {
         recordGeneration(marker, 'excluded', '숨은 생성 또는 사용자 대필 요청이라 생략');
@@ -273,6 +282,27 @@ async function handleCompletedResponse(response, marker) {
         recordGeneration(marker, 'http_error', `생성 요청 오류로 생략 (HTTP ${response.statusCode})`);
         return;
     }
+    if (record.overflow) {
+        recordGeneration(marker, 'response_limit', '응답이 알림 판별 크기 한도를 넘어 생략');
+        return;
+    }
+    try {
+        if (!await inspectResponse(record.bytes, response.getHeader('content-encoding'), response.getHeader('content-type'))) {
+            recordGeneration(marker, 'no_reply', '오류·빈 응답 또는 답장 본문 없는 응답이라 생략');
+            return;
+        }
+    } catch {
+        recordGeneration(marker, 'decode_error', '응답 압축을 해제하지 못해 알림 생략');
+        return;
+    }
+    // Reserve synchronously before dispatch: concurrent requests/retries in the
+    // same user generation must not race into two Android broadcasts.
+    const generationKey = JSON.stringify([marker.clientId, marker.generationId || marker.requestId]);
+    if (handledGenerations.has(generationKey)) {
+        recordGeneration(marker, 'duplicate', '같은 답변 생성의 알림을 이미 처리하여 중복 생략');
+        return;
+    }
+    handledGenerations.set(generationKey, Date.now());
     const state = currentState(marker);
     if (!shouldNotify(marker)) {
         const enabled = marker.enabled && (state?.enabled ?? true);
@@ -300,29 +330,53 @@ async function handleCompletedResponse(response, marker) {
 
 function patchResponseEnd() {
     if (patched) return;
-    http.ServerResponse.prototype.end = function sillyPopEnd(...args) {
+    function capture(response, chunk, encoding) {
         try {
-            const request = this.req;
+            const request = response.req;
             const pathname = String(request?.originalUrl || request?.url || '').split('?')[0];
             if (request?.method === 'POST' && pathname === '/api/plugins/silly-pop/probe') {
                 const marker = getMarker(request);
                 if (marker) probeResults.set(marker.clientId, {requestId: marker.requestId, at: Date.now()});
                 pruneState();
             }
-            if (request?.method === 'POST' && !this.__sillyPopTracked && GENERATION_PATHS.has(pathname)) {
+            if (request?.method === 'POST' && !response[OBSERVED] && GENERATION_PATHS.has(pathname)) {
                 const marker = getMarker(request);
+                const record = {marker, chunks: [], size: 0, overflow: false};
+                response[OBSERVED] = record;
                 if (marker) {
-                    this.__sillyPopTracked = true;
-                    this.once('finish', () => { void handleCompletedResponse(this, marker); });
+                    response.once('finish', () => {
+                        record.bytes = record.overflow ? null : Buffer.concat(record.chunks);
+                        record.chunks.length = 0;
+                        void handleCompletedResponse(response, marker, record).catch(error => {
+                            recordGeneration(marker, 'failed', `알림 처리 실패: ${cleanText(error.message, 100)}`);
+                        }).finally(() => { record.bytes = null; });
+                    });
+                    response.once('close', () => {
+                        record.chunks.length = 0;
+                        if (!response.writableFinished) recordGeneration(marker, 'interrupted', '응답 완료 전에 연결이 끊겨 알림 생략');
+                    });
                 } else if (!['quiet', 'impersonate'].includes(request?.body?.type)) {
                     unmarkedGenerationAt = Date.now();
                     unmarkedGenerationType = cleanText(request?.body?.type || request?.body?.params?.type, 30);
                 }
             }
+            const record = response[OBSERVED];
+            if (!record?.marker || record.overflow || chunk == null || typeof chunk === 'function') return;
+            const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk, typeof encoding === 'string' ? encoding : undefined);
+            record.size += bytes.length;
+            if (record.size > MAX_RESPONSE_BYTES) { record.overflow = true; record.chunks.length = 0; }
+            else record.chunks.push(bytes);
         } catch (error) {
             console.error('[Silly-Pop] 응답 감지 실패:', error.message);
         }
-        return originalEnd.apply(this, args);
+    }
+    http.ServerResponse.prototype.write = function sillyPopWrite(chunk, ...args) {
+        capture(this, chunk, args[0]);
+        return originalWrite.call(this, chunk, ...args);
+    };
+    http.ServerResponse.prototype.end = function sillyPopEnd(chunk, ...args) {
+        capture(this, chunk, args[0]);
+        return originalEnd.call(this, chunk, ...args);
     };
     patched = true;
 }
@@ -330,6 +384,7 @@ function patchResponseEnd() {
 function restoreResponseEnd() {
     if (!patched) return;
     http.ServerResponse.prototype.end = originalEnd;
+    http.ServerResponse.prototype.write = originalWrite;
     patched = false;
 }
 
@@ -425,6 +480,7 @@ async function exit() {
     restoreResponseEnd();
     clientStates.clear();
     handledRequests.clear();
+    handledGenerations.clear();
     generationResults.clear();
     probeResults.clear();
     unmarkedGenerationAt = 0;
@@ -433,3 +489,4 @@ async function exit() {
 }
 
 module.exports = { info, init, exit, __test: { broadcastCompleted, broadcastDispatched, bridgeCandidates, broadcastArgs, checkCompanion, runNotification, getMarker, shouldNotify } };
+

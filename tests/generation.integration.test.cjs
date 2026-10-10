@@ -141,14 +141,14 @@ async function generate(client,payload) {
     // Duplicate end/request must not produce a second notification.
     const duplicate=fetch(`${baseUrl}/api/backends/chat-completions/generate`,{method:'POST',body:JSON.stringify({silly_pop:marker})});
     await until(()=>pending.length===2,'duplicate did not arrive');
-    pending.at(-1).end('{}'); await (await duplicate).text();
+    pending.at(-1).end('{"choices":[{"message":{"content":"reply"}}]}'); await (await duplicate).text();
     await delay(100); assert.equal(notificationCalls().length,1);
 
     // A hidden main request still works after GENERATION_ENDED from another extension.
     client.events.get('ended')();
     client.sandbox.document.visibilityState='hidden';
     const direct=await generate(client,{type:'swipe'});
-    direct.response.end('{}'); await (await direct.result).text();
+    direct.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await direct.result).text();
     await until(()=>notificationCalls().length===2,'typed main generation without started was not dispatched');
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='dispatched','dispatch diagnostic not recorded');
 
@@ -156,15 +156,16 @@ async function generate(client,payload) {
     client.sandbox.document.visibilityState='visible';
     client.events.get('started')('normal',{},false);
     const foreground=await generate(client,{type:'normal'});
-    foreground.response.end('{}'); await (await foreground.result).text();
+    foreground.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await foreground.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='foreground','foreground suppression missing');
     // A visible page losing focus (e.g. browser controls) is not another app.
     client.sandbox.document.hasFocus=()=>false;
     const focusOnlyPrevious=(await status('mobile')).lastGeneration.at;
+    client.events.get('started')('normal',{},false);
     const focusOnly=await generate(client,{type:'normal'});
     client.windowEvents.get('blur')();
     await Promise.all([...requests]);
-    focusOnly.response.end('{}'); await (await focusOnly.result).text();
+    focusOnly.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await focusOnly.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.at>focusOnlyPrevious,'focus-only completion missing');
     assert.equal((await status('mobile')).lastGeneration.reason,'foreground');
     client.sandbox.document.hasFocus=()=>true;
@@ -183,31 +184,34 @@ async function generate(client,payload) {
     client.pageEvents.get('visibilitychange')();
     await Promise.all([...requests]);
     releaseHidden(); await delayedHidden;
-    returned.response.end('{}'); await (await returned.result).text();
+    returned.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await returned.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.at>returnedPrevious,'returned completion missing');
     assert.equal((await status('mobile')).lastGeneration.reason,'foreground');
 
     // A restored web app may receive pageshow without a focus event.
     const restoredPrevious=(await status('mobile')).lastGeneration.at;
+    client.events.get('started')('normal',{},false);
     const restored=await generate(client,{type:'swipe'});
     client.windowEvents.get('pagehide')();
     await Promise.all([...requests]);
     client.windowEvents.get('pageshow')();
     await Promise.all([...requests]);
-    restored.response.end('{}'); await (await restored.result).text();
+    restored.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await restored.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.at>restoredPrevious,'restored completion missing');
     assert.equal((await status('mobile')).lastGeneration.reason,'foreground');
     assert.equal(notificationCalls().length,2,'visible, returned, and restored pages must not notify');
     const quiet=await generate(client,{type:'quiet'});
     assert(!captured.at(-1).silly_pop,'hidden generation must not get a notification marker');
-    quiet.response.end('{}'); await (await quiet.result).text();
+    quiet.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await quiet.result).text();
+    client.events.get('started')('normal',{},false);
     const error=await generate(client,{type:'normal'});
-    error.response.statusCode=500; error.response.end('{}'); await (await error.result).text();
+    error.response.statusCode=500; error.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await error.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='http_error','HTTP error diagnostic missing');
     client.context.extensionSettings.response_notifier.enabled=false;
     client.sandbox.document.visibilityState='hidden';
+    client.events.get('started')('normal',{},false);
     const disabled=await generate(client,{type:'normal'});
-    disabled.response.end('{}'); await (await disabled.result).text();
+    disabled.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await disabled.result).text();
     await until(async()=>(await status('mobile')).lastGeneration?.reason==='disabled','disabled preference was not respected');
     assert.equal(notificationCalls().length,2);
 
@@ -223,7 +227,7 @@ async function generate(client,payload) {
     await until(()=>pending.length>pendingBefore,'unmarked generation did not arrive');
     assert(!captured.at(-1).silly_pop,'transport metadata must not be inserted into prompt body');
     assert(capturedMarkers.at(-1),'main request needs a header marker when events did not attach one');
-    pending.at(-1).end('{}'); await (await raw).text();
+    pending.at(-1).end('{"choices":[{"message":{"content":"reply"}}]}'); await (await raw).text();
     await until(()=>notificationCalls().length===3,'eventless HTTP main request was not dispatched');
     assert.equal((await status('another-client')).lastGeneration,null,'diagnostics are scoped to each client');
 
@@ -259,17 +263,42 @@ async function generate(client,payload) {
     reviewed.events.get('started')('quiet',{},false); // ordinary memory/translation utility
     const utility=await generate(reviewed,{type:'quiet'});
     assert(!captured.at(-1).silly_pop,'auxiliary quiet request must not notify');
-    utility.response.end('{}'); await (await utility.result).text();
+    utility.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await utility.result).text();
     assert.equal(notificationCalls().length,5);
 
     // Opting out of background-only still sends while SillyTavern is visible.
     client.sandbox.document.visibilityState='visible';
     client.context.extensionSettings.response_notifier.backgroundOnly=false;
+    client.events.get('started')('normal',{},false);
     const always=await generate(client,{type:'normal'});
-    always.response.end('{}'); await (await always.result).text();
+    always.response.end('{"choices":[{"message":{"content":"reply"}}]}'); await (await always.result).text();
     await until(()=>notificationCalls().length===6,'foreground notification should work when background-only is off');
 
-    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, retired publication callbacks).');
+    // Full client -> HTTP -> Android bridge path: main reply plus a nested
+    // 100LOG rewrite share one generation; the next user turn remains distinct.
+    client.events.get('started')('normal',{},false);
+    const main=await generate(client,{type:'normal'});
+    const mainMarker=captured.at(-1).silly_pop;
+    main.response.end('{"choices":[{"message":{"content":"first reply"}}]}');
+    await (await main.result).text();
+    await until(()=>notificationCalls().length===7,'main reply missing');
+    const nested=await traceGeneration(()=>{
+        client.events.get('started')('quiet',{},false);
+        return generate(client,{type:'quiet'});
+    });
+    assert.equal(captured.at(-1).silly_pop.generationId,mainMarker.generationId);
+    nested.response.end('{"choices":[{"message":{"content":"revised reply"}}]}');
+    await (await nested.result).text();
+    await until(async()=>(await status('mobile')).lastGeneration?.reason==='duplicate','rewrite was not deduplicated');
+    assert.equal(notificationCalls().length,7);
+    client.events.get('ended')(); client.events.get('ended')();
+    client.events.get('started')('normal',{},false);
+    const nextTurn=await generate(client,{type:'normal'});
+    nextTurn.response.end('{"choices":[{"message":{"content":"new turn"}}]}');
+    await (await nextTurn.result).text();
+    await until(()=>notificationCalls().length===8,'next user turn was incorrectly deduplicated');
+
+    console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();
     await Promise.allSettled([...requests]);
@@ -278,3 +307,4 @@ async function generate(client,payload) {
     await plugin.exit();
     fs.rmSync(temporary,{recursive:true,force:true});
 });
+
