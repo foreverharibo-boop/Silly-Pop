@@ -100,6 +100,16 @@ async function generate(client,payload) {
     return {response:pending.at(-1), result};
 }
 
+// The actual ST call chain is finishGenerating -> sendStreamingRequest or
+// sendGenerationRequest -> sendOpenAIRequest -> settings-ready -> fetch.
+async function nativeGenerate(client,payload) {
+    async function sendOpenAIRequest() { await Promise.resolve(); return await generate(client,payload); }
+    async function sendStreamingRequest() { return await sendOpenAIRequest(); }
+    async function sendGenerationRequest() { return await sendOpenAIRequest(); }
+    async function finishGenerating() { return await (payload.stream ? sendStreamingRequest : sendGenerationRequest)(); }
+    return await finishGenerating();
+}
+
 (async()=>{
     await plugin.init({get:(p,f)=>routes.GET.set(p,f),post:(p,f)=>routes.POST.set(p,f)});
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -120,8 +130,24 @@ async function generate(client,payload) {
 
     // Real HTTP + SSE completion, while the browser has moved to Termux and stops
     // running callbacks. Deliberately deliver the old foreground update last.
+    client.sandbox.document.visibilityState='hidden';
     client.events.get('started')('normal',{},false);
-    const stream=await generate(client,{type:'normal',stream:true});
+    // Interceptors may run direct API helpers after GENERATION_STARTED without
+    // emitting their own quiet start. Their valid text is NOT a character reply.
+    const beforeHelper=pending.length;
+    const helperBody=JSON.stringify({messages:[{role:'user',content:'choose relevant memory IDs'}]});
+    const helper=client.sandbox.fetch('/api/backends/chat-completions/generate',{method:'POST',body:helperBody});
+    await until(()=>pending.length>beforeHelper,'pre-generation helper did not arrive');
+    pending.at(-1).end('{"choices":[{"message":{"content":"1, 2, 3"}}]}');
+    await (await helper).text();
+    await delay(100);
+    assert.equal(capturedMarkers.at(-1),null,'an active generation must not label an untyped helper as a reply');
+    assert.equal(notificationCalls().length,0,'a helper finishing before the real request must not notify');
+
+    client.sandbox.document.visibilityState='visible';
+    client.pageEvents.get('visibilitychange')();
+    await Promise.all([...requests]);
+    const stream=await nativeGenerate(client,{stream:true});
     assert(captured.at(-1).silly_pop);
     let releaseStale;
     holdNextState=release=>{releaseStale=release;};
@@ -140,7 +166,7 @@ async function generate(client,payload) {
 
     // Duplicate end/request must not produce a second notification.
     const duplicate=fetch(`${baseUrl}/api/backends/chat-completions/generate`,{method:'POST',body:JSON.stringify({silly_pop:marker})});
-    await until(()=>pending.length===2,'duplicate did not arrive');
+    await until(()=>pending.length===3,'duplicate did not arrive');
     pending.at(-1).end('{"choices":[{"message":{"content":"reply"}}]}'); await (await duplicate).text();
     await delay(100); assert.equal(notificationCalls().length,1);
 

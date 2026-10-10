@@ -1,6 +1,6 @@
 {
   "name": "silly-pop",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "description": "Silly-Pop app-only Android notifications and Termux server bridge for SillyTavern",
   "main": "server-plugin/index.cjs",

@@ -53,6 +53,34 @@ function isServerReply(type, source = '') {
         && ['hundredlog', 'instead'].includes(source));
 }
 
+function isNativeReplyRequest(stack) {
+    // GENERATION_STARTED also covers interceptor preparation. Only the native
+    // reply dispatcher proves that an untyped request belongs to that reply.
+    // Inspect names locally; never retain or transmit stack traces or prompts.
+    const names = String(stack || '').split('\n').map(line => {
+        const name = line.match(/^\s*at (?:async )?([\w.$]+)(?:\s|\()/)?.[1]
+            || line.match(/^([\w.$]+)@/)?.[1];
+        return name?.split('.').at(-1);
+    }).filter(name => name && name !== 'processTicksAndRejections');
+    const provider = names.indexOf('sendOpenAIRequest');
+    // A helper called by a fetch wrapper can still have the outer native reply
+    // in its async stack. Require the nearest provider call's own dispatch chain.
+    return provider >= 0 && ['sendGenerationRequest', 'sendStreamingRequest'].includes(names[provider + 1])
+        && names[provider + 2] === 'finishGenerating';
+}
+
+function markChatCompletionPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    const stack = new Error().stack;
+    const nativeReply = isNativeReplyRequest(stack);
+    if ((!payload.type && !nativeReply)
+        || (String(payload.type).toLowerCase() === 'quiet' && !nativeReply && !quietReplySource(stack))) {
+        traceGeneration('생성 데이터: 보조·출처 미확인 요청 → 알림 제외');
+        return;
+    }
+    markGenerationPayload(payload);
+}
+
 function traceGeneration(detail) {
     diagnosticEvents.push(`${new Date().toLocaleTimeString()} ${detail}`);
     if (diagnosticEvents.length > 8) diagnosticEvents.shift();
@@ -245,10 +273,11 @@ function installRequestHook() {
                         try { headerMarker = JSON.parse(decodeURIComponent(incomingHeaders.get(MARKER_HEADER) || '')); } catch { /* No existing marker. */ }
                         const ownMarker = [headerMarker, payload.silly_pop, payload.params?.silly_pop].find(existing =>
                             existing?.protocol === COMPANION_PROTOCOL_VERSION && existing.clientId === clientId && existing.requestId);
-                        const type = payload.type || payload.params?.type || ownMarker?.type
-                            || (generationActive ? activeGenerationType : '');
+                        // A fetch wrapper may issue helpers inside the main call
+                        // stack. Untyped requests require their own event marker.
+                        const type = payload.type || payload.params?.type || ownMarker?.type || '';
                         trace = type ? `실제 요청: 알림 제외 (${diagnosticType(type)})`
-                            : '실제 요청: 유형·활성 생성 정보 없음 → 알림 표시 누락';
+                            : '실제 요청: 답장 생성 경로 미확인 → 알림 제외';
                         if (type && isServerReply(type, ownMarker?.replySource)) {
                             const marker = ownMarker || makeCompanionMarker(type);
                             const compact = {...marker, characterName: String(marker.characterName || '').slice(0,80),
@@ -319,7 +348,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.2 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.3 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -537,7 +566,7 @@ function initialize() {
         context.eventSource.on(eventTypes.GENERATE_AFTER_DATA, markGenerationPayload);
     }
     if (eventTypes.CHAT_COMPLETION_SETTINGS_READY) {
-        context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markGenerationPayload);
+        context.eventSource.on(eventTypes.CHAT_COMPLETION_SETTINGS_READY, markChatCompletionPayload);
     }
     document.addEventListener('visibilitychange', () => {
         void sendCompanionState(true);

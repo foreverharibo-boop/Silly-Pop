@@ -13,7 +13,7 @@ const sandbox={console,URL,URLSearchParams,Request,Headers,AbortSignal,Date,Math
 sandbox.globalThis=sandbox;
 const source=fs.readFileSync(path.join(__dirname,'../index.js'),'utf8');
 vm.runInNewContext(source.replaceAll('import.meta.url',JSON.stringify('https://local.test/extensions/silly-pop/index.js'))+
-    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,handleGenerationEnded,markGenerationPayload,quietReplySource,diagnosticEvents,traceGeneration};',sandbox);
+    '\nsettings=getSettings(); globalThis.testApi={installRequestHook,handleGenerationStarted,handleGenerationEnded,markGenerationPayload,markChatCompletionPayload,isNativeReplyRequest,quietReplySource,diagnosticEvents,traceGeneration};',sandbox);
 const endpoint='https://local.test/api/backends/chat-completions/generate';
 const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers).get('X-Silly-Pop')));
 (async()=>{
@@ -72,6 +72,9 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     const nestedRewrite={type:'quiet'};
     sandbox.testApi.markGenerationPayload(nestedRewrite);
     assert.equal(nestedRewrite.silly_pop.generationId,firstAttempt.silly_pop.generationId);
+    const quietHelper={type:'quiet',messages:[]};
+    sandbox.testApi.markChatCompletionPayload(quietHelper);
+    assert(!quietHelper.silly_pop,'quiet helpers must not inherit the surrounding 100LOG reply source');
     sandbox.testApi.handleGenerationEnded();
     // A utility that omits its type must not borrow the active normal reply type.
     sandbox.testApi.handleGenerationStarted('quiet',{},false);
@@ -103,15 +106,45 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
         assert.equal(calls.length,before+1,'exactly one fetch per request');
         assert.equal(calls.at(-1).init,init,'unrelated/unsupported requests pass through unchanged');
     }
-    assert(sandbox.testApi.diagnosticEvents.some(line=>line.includes('유형·활성 생성 정보 없음')));
+    assert(sandbox.testApi.diagnosticEvents.some(line=>line.includes('답장 생성 경로 미확인')));
     assert(sandbox.testApi.diagnosticEvents.some(line=>line.includes('알림 제외 (quiet)')));
     sandbox.testApi.handleGenerationStarted('arbitrary-private-text',{},false);
     assert(!JSON.stringify(sandbox.testApi.diagnosticEvents).includes('arbitrary-private-text'));
     for(let i=0;i<20;i++) sandbox.testApi.traceGeneration('test');
     assert.equal(sandbox.testApi.diagnosticEvents.length,8);
     sandbox.testApi.handleGenerationStarted('normal',{},false);
-    await sandbox.fetch(endpoint,{method:'POST',body:JSON.stringify({messages:[]})});
-    assert.equal(markerOf(calls.at(-1)).type,'normal','default main generation can omit type');
+    const directHelper={method:'POST',body:JSON.stringify({messages:[{role:'user',content:'helper'}]})};
+    await sandbox.fetch(endpoint,directHelper);
+    assert.equal(calls.at(-1).init,directHelper,'active generation alone must never label a helper');
+    const eventHelper={messages:[{role:'user',content:'helper that emits settings-ready'}]};
+    sandbox.testApi.markChatCompletionPayload(eventHelper);
+    assert(!eventHelper.silly_pop,'settings-ready is also emitted for auxiliary requests');
+
+    // Match ST's awaited dispatch chain, including default type=undefined.
+    // Both streaming and non-streaming character replies still get markers.
+    async function sendOpenAIRequest(payload, useEvent) {
+        await Promise.resolve();
+        if (useEvent) sandbox.testApi.markChatCompletionPayload(payload);
+        return await sandbox.fetch(endpoint,{method:'POST',body:JSON.stringify(payload)});
+    }
+    async function sendGenerationRequest(payload, useEvent) { return await sendOpenAIRequest(payload,useEvent); }
+    async function sendStreamingRequest(payload, useEvent) { return await sendOpenAIRequest(payload,useEvent); }
+    async function finishGenerating(payload, streaming, useEvent) {
+        return await (streaming ? sendStreamingRequest : sendGenerationRequest)(payload,useEvent);
+    }
+    for (const streaming of [false,true]) for (const useEvent of [false,true]) {
+        const payload={messages:[{role:'user',content:'actual reply'}],stream:streaming};
+        await finishGenerating(payload,streaming,useEvent);
+        if (useEvent) assert.equal(markerOf(calls.at(-1)).type,'normal','native default reply must remain notifiable');
+        else assert(!new Headers(calls.at(-1).init.headers).has('X-Silly-Pop'),'an untyped raw request must not acquire a marker from the surrounding stack');
+        assert.equal(Boolean(payload.silly_pop),useEvent);
+    }
+    await sendOpenAIRequest({messages:[]},true);
+    assert(!new Headers(calls.at(-1).init.headers).has('X-Silly-Pop'),'direct provider helpers must not inherit reply status');
+    const nestedFrames=['markChatCompletionPayload','EventEmitter.emit','sendOpenAIRequest','prepareHelper',
+        'fetchWrapper','sendOpenAIRequest','sendGenerationRequest','finishGenerating'];
+    assert.equal(sandbox.testApi.isNativeReplyRequest(nestedFrames.map(name=>`    at ${name} (https://local.test/script.js:1:1)`).join('\n')),false,
+        'an outer native generation does not prove that a nested helper is a reply');
     const quiet={method:'POST',body:JSON.stringify({type:'quiet'})};
     await sandbox.fetch(endpoint,quiet);assert.equal(calls.at(-1).init,quiet);
 
