@@ -20,7 +20,9 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     sandbox.testApi.installRequestHook();
     const hook=sandbox.fetch;
     sandbox.testApi.installRequestHook(); assert.equal(sandbox.fetch,hook);
-    const body=JSON.stringify({type:'normal',messages:[{role:'user',content:'do not change me'}]});
+    const mainPayload={type:'normal',messages:[{role:'user',content:'do not change me'}]};
+    sandbox.testApi.markGenerationPayload(mainPayload);
+    const body=JSON.stringify(mainPayload);
     const headers={'Content-Type':'application/json','X-CSRF-Token':'unchanged'};
     const controller=new AbortController();
     const options={method:'POST',headers,body,signal:controller.signal,credentials:'same-origin'};
@@ -35,12 +37,17 @@ const markerOf=call=>JSON.parse(decodeURIComponent(new Headers(call.init.headers
     assert(!JSON.stringify(sandbox.testApi.diagnosticEvents).includes('do not change me'));
     assert(!JSON.stringify(sandbox.testApi.diagnosticEvents).includes('unchanged'));
 
+    const helperOptions={method:'POST',body:JSON.stringify({type:'normal',messages:[{role:'user',content:'memory IDs'}]})};
+    await sandbox.fetch(endpoint,helperOptions);
+    assert(!new Headers(calls.at(-1).init.headers).has('X-Silly-Pop'),'typed helper must not notify');
+
     // Request input and init overrides must preserve the original body stream.
     const request=new Request(endpoint,{method:'POST',headers,body});
     await sandbox.fetch(request);
     call=calls.at(-1);assert.equal(call.input,request);assert.equal(request.bodyUsed,false);
     assert.equal(await request.clone().text(),body); assert.equal(markerOf(call).type,'normal');
-    const overrideBody=JSON.stringify({type:'swipe',messages:[]});
+    const overridePayload={type:'swipe',messages:[]};sandbox.testApi.markGenerationPayload(overridePayload);
+    const overrideBody=JSON.stringify(overridePayload);
     await sandbox.fetch(request,{body:overrideBody,headers:[['X-CSRF-Token','override']]});
     call=calls.at(-1);assert.equal(call.init.body,overrideBody);
     assert.equal(new Headers(call.init.headers).get('X-CSRF-Token'),'override');

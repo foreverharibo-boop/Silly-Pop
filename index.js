@@ -7,7 +7,7 @@
 const MODULE_NAME = 'response_notifier';
 const COMPANION_API = '/api/plugins/silly-pop';
 const COMPANION_PROTOCOL_VERSION = 1;
-const REQUIRED_BRIDGE_VERSION = '2.4.4';
+const REQUIRED_BRIDGE_VERSION = '2.4.5';
 const MARKER_HEADER = 'X-Silly-Pop';
 const GENERATION_PATHS = new Set([
     '/api/backends/chat-completions/generate',
@@ -40,99 +40,48 @@ let activeQuietReplySource = '';
 const generationFrames = [];
 let reviewedReply = null;
 
-// Opt-in only: ordinary replies still complete on the server while the browser
-// is suspended. A reviewed reply needs BOTH server text and a final render receipt.
+// Review scopes identify one reply across drafts and rewrites. They do not
+// delay notifications: the server announces the first complete valid response.
 function sameReviewChat(record) {
     const ctx = getContext();
     return record && ctx?.chat === record.chat && ctx.chatId === record.chatId
         && ctx.characterId === record.characterId && ctx.groupId === record.groupId;
 }
-
 function beginReviewedReply(owner, options = {}) {
     if (!['ttotto', 'hundredlog'].includes(owner)) return null;
     const ctx = getContext();
     if (!Array.isArray(ctx?.chat)) return null;
     const frame = generationFrames.find(frame => isNotifiableGeneration(frame.type));
-    if (!sameReviewChat(reviewedReply) || reviewedReply?.ready || reviewedReply?.cancelled) {
+    if (!sameReviewChat(reviewedReply) || reviewedReply.cancelled) {
         const type = options.type || frame?.type || 'normal';
         reviewedReply = { chat: ctx.chat, chatId: ctx.chatId, characterId: ctx.characterId,
-            groupId: ctx.groupId, type, generationId: frame?.generationId || makeCompanionMarker(type).generationId,
-            index: options.index ?? (['swipe', 'continue'].includes(type) ? ctx.chat.length - 1 : ctx.chat.length),
-            tokens: new Set(), cancelled: false, ready: false, sending: false, sent: false };
+            groupId: ctx.groupId, type, cancelled: false,
+            generationId: frame?.generationId || makeCompanionMarker(type).generationId };
     }
     const record = reviewedReply;
-    const token = {};
-    record.tokens.add(token);
     let settled = false;
-    const cancel = () => { if (!settled) { record.cancelled = true; settle(); } };
-    function settle() {
-        if (settled) return;
-        settled = true;
-        record.tokens.delete(token);
-        options.signal?.removeEventListener('abort', cancel);
-    }
+    function finish() { settled = true; options.signal?.removeEventListener('abort', cancel); }
+    function cancel() { if (!settled) { record.cancelled = true; finish(); } }
     options.signal?.addEventListener('abort', cancel, { once: true });
     if (options.signal?.aborted) cancel();
     return Object.freeze({
         defer(init) {
-            const marker = holdNotificationMarker({ ...makeCompanionMarker(record.type), generationId: record.generationId });
+            const marker = linkReviewMarker(makeCompanionMarker(record.type), record);
             const headers = new Headers(init?.headers);
             headers.set(MARKER_HEADER, encodeURIComponent(JSON.stringify(marker)));
             return { ...init, headers };
         },
-        finish(message) {
-            if (message) record.finalMessage = message;
-            settle();
-        },
-        cancel,
+        finish, cancel,
     });
 }
-
-function holdNotificationMarker(marker) {
-    // Old servers do not understand reviewPending. Fail closed there too instead
-    // of sending a draft notification during a staggered extension/server update.
-    return {...marker, reviewNotifyEnabled: marker.reviewPending ? marker.reviewNotifyEnabled === true : marker.enabled === true,
-        reviewPending: true, enabled: false};
+function linkReviewMarker(marker, record) {
+    return { ...marker, generationId: record.generationId, reviewPending: false,
+        enabled: !record.cancelled && (marker.reviewPending ? marker.reviewNotifyEnabled === true : marker.enabled === true) };
 }
-
 function linkReviewedReply(marker) {
-    if (sameReviewChat(reviewedReply) && !reviewedReply.ready && !reviewedReply.cancelled
-        && (isNotifiableGeneration(marker.type) || marker.replySource === 'hundredlog')) {
-        marker.generationId = reviewedReply.generationId;
-        return holdNotificationMarker(marker);
-    }
-    return marker;
-}
-
-async function sendReviewedReply(record = reviewedReply) {
-    if (!record?.ready || record.cancelled || record.sent || record.sending || !sameReviewChat(record)) return;
-    record.sending = true;
-    try {
-        const marker = { ...holdNotificationMarker({...makeCompanionMarker(record.type), generationId: record.generationId}),
-            reviewCompleted: true };
-        const response = await fetch(`${COMPANION_API}/review-completed`, {
-            method: 'POST', keepalive: true,
-            headers: { ...getContext().getRequestHeaders?.(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(marker),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const result = await response.json();
-        record.sent = result.accepted === true;
-        if (!record.sent) throw new Error('서버가 검수 완료 신호를 받지 못했습니다.');
-    } catch (error) {
-        console.warn('[Silly-Pop] 검수 완료 알림 연결:', error.message);
-    } finally { record.sending = false; }
-}
-
-function reviewedReplyRendered(index, type) {
-    const record = reviewedReply;
-    if (!sameReviewChat(record) || record.cancelled || record.ready || record.tokens.size
-        || index !== record.index || ['quiet', 'impersonate', 'first_message'].includes(type)) return;
-    const message = getContext().chat[index];
-    if (!message || message.is_user || message.is_system || !String(message.mes || '').trim()
-        || message.mes === '...' || record.finalMessage && record.finalMessage !== message) return;
-    record.ready = true;
-    void sendReviewedReply(record);
+    return sameReviewChat(reviewedReply)
+        && (isNotifiableGeneration(marker.type) || marker.replySource === 'hundredlog')
+        ? linkReviewMarker(marker, reviewedReply) : marker;
 }
 let responseDetail = '서버 응답 알림: 생성 요청 대기';
 
@@ -200,8 +149,7 @@ function markChatCompletionPayload(payload) {
     if (!payload || typeof payload !== 'object') return;
     const stack = captureNotificationStack();
     const nativeReply = takeNativePrompt(payload) || isNativeReplyRequest(stack);
-    if ((!payload.type && !nativeReply)
-        || (String(payload.type).toLowerCase() === 'quiet' && !nativeReply && !quietReplySource(stack))) {
+    if (!nativeReply && !(String(payload.type).toLowerCase() === 'quiet' && quietReplySource(stack))) {
         traceGeneration('생성 데이터: 보조·출처 미확인 요청 → 알림 제외');
         return;
     }
@@ -408,7 +356,8 @@ function installRequestHook() {
                         const type = payload.type || payload.params?.type || ownMarker?.type || '';
                         trace = type ? `실제 요청: 알림 제외 (${diagnosticType(type)})`
                             : '실제 요청: 답장 생성 경로 미확인 → 알림 제외';
-                        if (type && isServerReply(type, ownMarker?.replySource)) {
+                        if (type && isServerReply(type, ownMarker?.replySource)
+                            && (ownMarker || isNativeReplyRequest(captureNotificationStack()))) {
                             const marker = linkReviewedReply({... (ownMarker || makeCompanionMarker(type))});
                             const compact = {...marker, characterName: String(marker.characterName || '').slice(0,80),
                                 url: String(marker.url || '').slice(0,2048)};
@@ -445,7 +394,7 @@ function handleGenerationStarted(type, _params, dryRun = false) {
     // inherit the parent's normal type just because it is not notifiable.
     const parent = generationFrames.at(-1);
     if (!['quiet', 'impersonate'].includes(type.toLowerCase())) {
-        if (reviewedReply && !reviewedReply.ready) reviewedReply.cancelled = true;
+        if (reviewedReply) reviewedReply.cancelled = true;
         reviewedReply = null;
         generationFrames.length = 0;
     }
@@ -482,7 +431,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.6 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.7 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -701,9 +650,6 @@ function initialize() {
             generationFrames.length = 0; syncGenerationFrame();
         });
     }
-    if (eventTypes.CHARACTER_MESSAGE_RENDERED) {
-        context.eventSource.on(eventTypes.CHARACTER_MESSAGE_RENDERED, reviewedReplyRendered);
-    }
     if (eventTypes.GENERATE_AFTER_DATA) {
         context.eventSource.on(eventTypes.GENERATE_AFTER_DATA, handleGenerationData);
     }
@@ -717,7 +663,6 @@ function initialize() {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') lifecycleHidden = false;
         void sendCompanionState(true);
-        void sendReviewedReply();
     });
     const sendHiddenState = () => {
         // Lifecycle events can precede the browser updating visibilityState.

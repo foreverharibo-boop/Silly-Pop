@@ -93,7 +93,11 @@ async function status(clientId) {
     return (await fetch(`${baseUrl}/api/plugins/silly-pop/status?clientId=${clientId}`)).json();
 }
 async function generate(client,payload) {
-    client.events.get('payload')(payload);
+    function sendOpenAIRequest() { client.events.get('payload')(payload); }
+    function sendGenerationRequest() { sendOpenAIRequest(); }
+    function finishGenerating() { sendGenerationRequest(); }
+    if (payload.type && payload.type !== 'quiet') finishGenerating();
+    else client.events.get('payload')(payload);
     const count=pending.length;
     const result=fetch(`${baseUrl}/api/backends/chat-completions/generate`,{method:'POST',body:JSON.stringify(payload)});
     await until(()=>pending.length>count,'generation request did not arrive');
@@ -135,7 +139,7 @@ async function nativeGenerate(client,payload) {
     // Interceptors may run direct API helpers after GENERATION_STARTED without
     // emitting their own quiet start. Their valid text is NOT a character reply.
     const beforeHelper=pending.length;
-    const helperBody=JSON.stringify({messages:[{role:'user',content:'choose relevant memory IDs'}]});
+    const helperBody=JSON.stringify({type:'normal',messages:[{role:'user',content:'choose relevant memory IDs'}]});
     const helper=client.sandbox.fetch('/api/backends/chat-completions/generate',{method:'POST',body:helperBody});
     await until(()=>pending.length>beforeHelper,'pre-generation helper did not arrive');
     pending.at(-1).end('{"choices":[{"message":{"content":"1, 2, 3"}}]}');
@@ -250,9 +254,12 @@ async function nativeGenerate(client,payload) {
     client.events.get('ended')();
     const pendingBefore=pending.length;
     const rawBody=JSON.stringify({type:'normal',messages:[{role:'user',content:'test'}]});
-    const raw=client.sandbox.fetch('/api/backends/chat-completions/generate',{
+    function sendOpenAIRequest() { return client.sandbox.fetch('/api/backends/chat-completions/generate',{
         method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':'keep-me'},body:rawBody,
-    });
+    }); }
+    function sendGenerationRequest() { return sendOpenAIRequest(); }
+    function finishGenerating() { return sendGenerationRequest(); }
+    const raw=finishGenerating();
     await until(()=>pending.length>pendingBefore,'unmarked generation did not arrive');
     assert(!captured.at(-1).silly_pop,'transport metadata must not be inserted into prompt body');
     assert(capturedMarkers.at(-1),'main request needs a header marker when events did not attach one');
@@ -410,54 +417,43 @@ async function nativeGenerate(client,payload) {
     await Promise.all([...requests]);
     const api = client.sandbox.sillyPopNotifications;
     assert.equal(api.apiVersion, 1);
-    for (const outcome of ['both', 'ttotto', 'hundredlog', 'cancel', 'empty', 'wrong-message', 'receipt-first']) {
+    for (const outcome of ['both', 'ttotto', 'hundredlog', 'empty', 'old-tab']) {
         client.context.chat.length = 0;
         client.events.get('started')('normal', {}, false);
         const before = notificationCalls().length;
         const first = outcome === 'hundredlog' ? null : api.beginReview('ttotto');
         const second = outcome === 'ttotto' ? null : api.beginReview('hundredlog', {index:0});
         const held = await generate(client, {type:'normal'});
-        const marked = captured.at(-1).silly_pop;
-        assert.equal(marked.reviewPending, true);
-        const finalMessage = {is_user:false, mes:'FINAL REVIEWED REPLY'};
-        if (outcome !== 'receipt-first') {
-            held.response.end(outcome === 'empty' ? '{}' : '{"choices":[{"message":{"content":"DRAFT"}}]}');
-            await (await held.result).text();
-            await until(async () => (await status('mobile')).lastGeneration?.reason === (outcome === 'empty' ? 'no_reply' : 'review_pending'), 'review candidate was not held');
+        let marked = captured.at(-1).silly_pop;
+        assert.equal(marked.reviewPending, false); assert.equal(marked.enabled,true);
+        assert.equal(notificationCalls().length,before,'request start alone cannot notify');
+        // Simulate a frozen browser: neither finish nor rendered callback runs.
+        held.response.end(outcome === 'empty' ? '{}' : '{"choices":[{"message":{"content":"DRAFT"}}]}');
+        await (await held.result).text();
+        await until(async () => (await status('mobile')).lastGeneration?.reason === (outcome === 'empty' ? 'no_reply' : 'dispatched'), 'server completion must not wait for browser review');
+        const expected=before+(outcome==='empty'?0:1);
+        assert.equal(notificationCalls().length,expected);
+        first?.finish();second?.finish({mes:'FINAL'});
+        await fetch(baseUrl + '/api/plugins/silly-pop/review-completed', {method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({...marked, reviewCompleted:true})});
+        if(outcome!=='empty') {
+            const rewrite=await generate(client,{type:'normal'});
+            rewrite.response.end('{"choices":[{"message":{"content":"REWRITTEN"}}]}');await (await rewrite.result).text();
+            await until(async()=>(await status('mobile')).lastGeneration?.reason==='duplicate','rewrite must retain the original generation identity');
         }
-        assert.equal(notificationCalls().length, before, 'draft must never notify');
-        client.context.chat.push(finalMessage);
-        first?.finish();
-        if (first && second) {
-            client.events.get('rendered')(0, 'normal');
-            await Promise.all([...requests]);
-            assert.equal(notificationCalls().length, before, 'first reviewer must not release another reviewer');
-        }
-        if (outcome === 'cancel') second?.cancel();
-        else second?.finish(finalMessage);
-        client.events.get('rendered')(outcome === 'wrong-message' ? 1 : 0, 'normal');
-        await Promise.all([...requests]);
-        if (outcome === 'receipt-first') {
-            assert.equal(notificationCalls().length, before, 'final receipt without server reply cannot notify');
-            held.response.end('{"choices":[{"message":{"content":"SERVER REPLY"}}]}');
-            await (await held.result).text();
-        }
-        if (['cancel','empty','wrong-message'].includes(outcome)) {
-            await delay(75);
-            assert.equal(notificationCalls().length, before, outcome + ' must not notify');
-        } else {
-            await until(() => notificationCalls().length === before + 1, 'reviewed final reply did not notify: ' + outcome);
-            client.events.get('rendered')(0, 'normal');
-            await Promise.all([...requests]);
-            const headers = {'Content-Type':'application/json'};
-            await fetch(baseUrl + '/api/plugins/silly-pop/review-completed', {method:'POST',headers,
-                body:JSON.stringify({...marked, reviewCompleted:true})});
-            await delay(50);
-            assert.equal(notificationCalls().length, before + 1, 'replayed completion must remain idempotent');
-        }
-        client.events.get('ended')();
-        await Promise.all([...requests]);
+        await delay(30);assert.equal(notificationCalls().length,expected,'finish/render/rewrites cannot send a second alert');
+        client.events.get('ended')();await Promise.all([...requests]);
     }
+    // An already-open 1.5.6 tab still carries the old disabled/held marker.
+    // The new server must recover the enabled preference and notify without a receipt.
+    const beforeLegacy=notificationCalls().length;
+    const legacy={protocol:1,requestId:'legacy-request',generationId:'legacy-turn',clientId:'legacy-tab',type:'normal',
+        reviewPending:true,reviewNotifyEnabled:true,enabled:false,visibleAtRequest:false,backgroundOnly:false};
+    const beforePending=pending.length;
+    const legacyResponse=fetch(baseUrl+'/api/backends/chat-completions/generate',{method:'POST',body:JSON.stringify({type:'normal',silly_pop:legacy})});
+    await until(()=>pending.length>beforePending,'legacy request');
+    pending.at(-1).end('{"choices":[{"message":{"content":"FIRST REPLY"}}]}');await (await legacyResponse).text();
+    await until(()=>notificationCalls().length===beforeLegacy+1,'legacy deferred marker must not stall');
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur-only app switch, focus return, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();

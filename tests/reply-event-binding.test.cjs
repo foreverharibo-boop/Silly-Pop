@@ -65,3 +65,12 @@ test('dry runs and completed generations leave no prompt permission', () => {
     const ended = { messages: prompt.filter(Boolean) }; b.api.markChatCompletionPayload(ended);
     assert(!ended.silly_pop);
 });
+
+test('typed normal helper cannot borrow an active native generation',()=>{
+    const b=browser();b.api.handleGenerationStarted('normal');
+    const prompt=[{role:'user',content:'native'}];b.api.data({prompt});
+    const helper={type:'normal',messages:structuredClone(prompt)};
+    b.api.markChatCompletionPayload(helper);assert(!helper.silly_pop);
+    const main={type:'normal',messages:prompt.filter(Boolean)};
+    b.api.markChatCompletionPayload(main);assert(main.silly_pop);
+});

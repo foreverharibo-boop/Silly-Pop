@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.4';
+const VERSION = '2.4.5';
 const bridgeAuth = require('./bridge-auth.cjs');
 const {MAX_RESPONSE_BYTES, inspectResponse} = require('./reply-response.cjs');
 const PROTOCOL_VERSION = 1;
@@ -33,8 +33,6 @@ const handledRequests = new Map();
 const handledGenerations = new Map();
 const generationResults = new Map();
 const probeResults = new Map();
-const reviewedGenerations = new Map();
-const REVIEW_TTL_MS = 60 * 60 * 1000;
 let unmarkedGenerationAt = 0;
 let unmarkedGenerationType = '';
 const originalEnd = http.ServerResponse.prototype.end;
@@ -227,9 +225,6 @@ function getMarker(request) {
 }
 
 function pruneState(now = Date.now()) {
-    for (const [key, record] of reviewedGenerations) {
-        if (now - record.at > REVIEW_TTL_MS) reviewedGenerations.delete(key);
-    }
     for (const [id, state] of clientStates) {
         if (now - state.updatedAt > CLIENT_TTL_MS) clientStates.delete(id);
     }
@@ -274,29 +269,6 @@ function recordGeneration(marker, reason, detail) {
     console.log(`[Silly-Pop] 자동 알림 (${marker.generationId || marker.requestId}): ${detail}`);
 }
 
-function reviewRecord(marker) {
-    const key = JSON.stringify([marker.clientId, marker.generationId]);
-    let record = reviewedGenerations.get(key);
-    if (!record) {
-        if (reviewedGenerations.size >= 512) return null;
-        record = {at: Date.now()};
-        reviewedGenerations.set(key, record);
-    }
-    return record;
-}
-
-async function settleReviewedReply(record) {
-    // A browser receipt alone is never evidence that the server received text.
-    // A server draft alone is never evidence that review finished.
-    if (!record?.candidate || !record.receipt || record.settled) return;
-    record.settled = true;
-    const marker = {...record.candidate, stateTs: record.receipt.stateTs,
-        visibleAtRequest: record.receipt.visibleAtRequest, enabled: record.receipt.enabled,
-        backgroundOnly: record.receipt.backgroundOnly, sound: record.receipt.sound,
-        vibrate: record.receipt.vibrate, url: record.receipt.url || record.candidate.url};
-    await dispatchCompletedReply(marker);
-}
-
 async function handleCompletedResponse(response, marker, record) {
     const now = Date.now();
     pruneState(now);
@@ -325,18 +297,8 @@ async function handleCompletedResponse(response, marker, record) {
         return;
     }
     handledRequests.set(requestKey, now);
-    if (marker.reviewPending) {
-        if (!marker.generationId) return;
-        const pending = reviewRecord(marker);
-        if (!pending) {
-            recordGeneration(marker, 'review_limit', '검수 대기 기록 한도에 도달하여 알림 생략');
-            return;
-        }
-        pending.candidate = marker;
-        recordGeneration(marker, 'review_pending', '답장 본문 수신 · 또또/100LOG 최종 완료 대기');
-        await settleReviewedReply(pending);
-        return;
-    }
+    // Legacy reviewPending markers retain their original enabled preference,
+    // but no browser render/review receipt is required anymore.
     await dispatchCompletedReply(marker);
 }
 
@@ -473,19 +435,9 @@ async function init(router) {
         response.json({ok: true, result: {reason: 'retired', detail: '화면 게시 알림은 사용하지 않습니다. 서버 응답에서 알림을 보냅니다.'}});
     });
 
-    router.post('/review-completed', (request, response) => {
-        pruneState();
-        const marker = getMarker({body: {silly_pop: request.body}});
-        if (!marker?.generationId || !marker.reviewPending || request.body?.reviewCompleted !== true) {
-            return response.status(400).json({ok: false, accepted: false});
-        }
-        const pending = reviewRecord(marker);
-        if (!pending) return response.status(429).json({ok: false, accepted: false});
-        pending.receipt ??= marker;
-        void settleReviewedReply(pending).catch(error => {
-            recordGeneration(marker, 'failed', `검수 완료 알림 실패: ${cleanText(error.message, 100)}`);
-        });
-        response.json({ok: true, accepted: true});
+    // Old tabs may still send receipts. A receipt cannot trigger a push or AI call.
+    router.post('/review-completed', (_request, response) => {
+        response.json({ok: true, accepted: true, retired: true});
     });
 
     // GET is intentional: visibility changes may freeze a mobile browser immediately,
@@ -544,7 +496,6 @@ async function exit() {
     handledGenerations.clear();
     generationResults.clear();
     probeResults.clear();
-    reviewedGenerations.clear();
     unmarkedGenerationAt = 0;
     unmarkedGenerationType = '';
     lastCompanionCheck = { checkedAt: 0, installed: false };
