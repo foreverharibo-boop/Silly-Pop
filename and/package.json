@@ -1,6 +1,6 @@
 {
   "name": "silly-pop-and",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "main": "server/index.cjs",
   "license": "AGPL-3.0-or-later",

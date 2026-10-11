@@ -25,38 +25,21 @@ function fixture(t) {
         enabled: false, reviewNotifyEnabled: true, reviewPending: true, visible: false, backgroundOnly: true, characterName: 'Speaker' });
     return { core, sent, marker, advance: ms => { clock += ms; } };
 }
-test('review gate requires actual response and receipt in either order; rewrites and repeats send once', async t => {
-    const f = fixture(t);
-    for (const order of ['response-first', 'receipt-first']) {
-        const m = f.marker(), receipt = { ...m, reviewCompleted: true }, before = f.sent.length;
-        if (order === 'response-first') await f.core.completed('alice', m);
-        else await f.core.reviewCompleted('alice', receipt);
-        assert.equal(f.sent.length, before);
-        if (order === 'response-first') await f.core.reviewCompleted('alice', receipt);
-        else await f.core.completed('alice', m);
-        assert.equal(f.sent.length, before + 1);
-        await f.core.completed('alice', m); await f.core.reviewCompleted('alice', receipt);
-        assert.equal(f.sent.length, before + 1);
-        assert.equal(JSON.parse(f.sent.at(-1)[1]).title, 'Speaker의 답장이 도착했어요');
-        assert.equal(JSON.parse(f.sent.at(-1)[1]).body, '');
-    }
+test('legacy review markers notify on server reply without a receipt and deduplicate rewrites',async t=>{
+    const f=fixture(t),m=f.marker();
+    await f.core.completed('alice',m);assert.equal(f.sent.length,1);
+    await f.core.completed('alice',m);await f.core.reviewCompleted('alice',{...m,reviewCompleted:true});
+    assert.equal(f.sent.length,1);
+    assert.equal(JSON.parse(f.sent[0][1]).title,'Speaker의 답장이 도착했어요');
 });
-test('review receipt is owner/client/device scoped, respects disabling and final visibility, and expires', async t => {
-    const f = fixture(t), m = f.marker();
-    await f.core.completed('alice', m);
-    await assert.rejects(f.core.reviewCompleted('bob', { ...m, reviewCompleted: true }));
-    await f.core.reviewCompleted('alice', { ...m, clientId: id(), reviewCompleted: true });
-    assert.equal(f.sent.length, 0);
-    await f.core.reviewCompleted('alice', { ...m, reviewNotifyEnabled: false, reviewCompleted: true });
-    assert.equal(f.sent.length, 0);
-    const foreground = f.marker(); await f.core.completed('alice', foreground);
-    await f.core.reviewCompleted('alice', { ...foreground, visible: true, reviewCompleted: true });
-    assert.equal(f.sent.length, 0);
-    const expired = f.marker(); await f.core.completed('alice', expired); f.advance(3600001);
-    await f.core.reviewCompleted('alice', { ...expired, reviewCompleted: true });
-    assert.equal(f.sent.length, 0, 'expired server text cannot satisfy a later receipt');
+test('a receipt alone never notifies; owner, disabled and foreground restrictions remain',async t=>{
+    const f=fixture(t),m=f.marker();
+    await f.core.reviewCompleted('alice',{...m,reviewCompleted:true});assert.equal(f.sent.length,0);
+    await f.core.completed('bob',m);assert.equal(f.sent.length,0);
+    await f.core.completed('alice',{...m,reviewNotifyEnabled:false});assert.equal(f.sent.length,0);
+    const visible={...f.marker(),visible:true};await f.core.completed('alice',visible);assert.equal(f.sent.length,0);
 });
-test('actual HTTP observer rejects errors, empty/JEV/quiet replies and only releases valid compressed text after receipt', async t => {
+test('actual HTTP observer rejects errors, empty/JEV/quiet replies and notifies valid compressed text without any browser receipt', async t => {
     const f = fixture(t), routes = new Map();
     install({ get() {}, post(route, fn) { routes.set(route, fn); } }, f.core);
     const restore = observe(f.core); t.after(restore);
@@ -91,9 +74,10 @@ test('actual HTTP observer rejects errors, empty/JEV/quiet replies and only rele
     }
     const m = f.marker(); scenario = { body: { choices: [{ message: { content: 'actual draft' } }] }, gzip: true };
     await (await post('/api/backends/chat-completions/generate', { type: 'normal', [field]: m })).text();
-    await pause(); assert.equal(f.sent.length, 0, 'even a complete actual draft must wait');
+    for (let n=0;n<100&&f.sent.length===0;n++) await new Promise(resolve=>setTimeout(resolve,5));
+    assert.equal(f.sent.length,1,'browser review/finish/render callbacks are deliberately absent');
     const noOwner = await post('/review-completed', { ...m, reviewCompleted: true }, { 'x-no-owner': '1' });
-    assert.equal(noOwner.status, 401); assert.equal(f.sent.length, 0);
+    assert.equal(noOwner.status, 401); assert.equal(f.sent.length, 1);
     const receipt = await post('/review-completed', { ...m, reviewCompleted: true });
     assert.equal((await receipt.json()).accepted, true);
     for (let n = 0; n < 100 && f.sent.length === 0; n++) await new Promise(resolve => setTimeout(resolve, 5));
@@ -122,12 +106,13 @@ test('all APK/iOS/AND load orders preserve every review scope and request metada
         const marked = a.defer({ body: JSON.stringify({ messages: [{ content: 'same' }] }), signal: controller.signal });
         assert.equal(marked.headers['X-Silly-Pop'], 'held'); assert.equal(marked.signal, controller.signal);
         const body = JSON.parse(marked.body);
-        assert.equal(body.silly_pop_ios.reviewPending, true); assert.equal(body.silly_pop_and.reviewPending, true);
+        assert.equal(body.silly_pop_ios.reviewPending, false); assert.equal(body.silly_pop_and.reviewPending, false);
+        assert.equal(body.silly_pop_ios.enabled,true);assert.equal(body.silly_pop_and.enabled,true);
         assert.deepEqual(body.messages, [{ content: 'same' }]);
         c.chat.push({ mes: 'final' }); a.finish();
-        for (const p of Object.values(providers)) p.rendered(0, 'normal');
+        // No render callback is required or registered.
         await pause(); assert.equal(receipts.length, 0);
-        b.finish(c.chat[0]); for (const p of Object.values(providers)) p.rendered(0, 'normal');
-        await pause(); assert.equal(receipts.length, 2); assert.deepEqual(apkEvents, ['finish','finish']);
+        b.finish(c.chat[0]);
+        await pause(); assert.equal(receipts.length, 0); assert.deepEqual(apkEvents, ['finish','finish']);
     }
 });

@@ -200,23 +200,17 @@ async function nativeMarker(b) {
     return data.silly_pop_and;
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-test('actual frontend waits for both review scopes and final render, never generation-ended',async()=>{
-    const b=await browser(); await b.emit('GENERATION_STARTED','normal');
-    const api=b.sandbox.sillyPopNotifications;
-    const a=api.beginReview('ttotto'), c=api.beginReview('hundredlog',{index:0});
-    const marker=await nativeMarker(b);
-    assert.equal(marker.enabled,false);assert.equal(marker.reviewNotifyEnabled,true);
-    const completions=()=>b.calls.filter(x=>String(x.input).endsWith('/review-completed'));
-    b.context.chat.push({mes:'draft',is_user:false});
-    await b.emit('GENERATION_ENDED'); a.finish();
-    await b.emit('CHARACTER_MESSAGE_RENDERED',0,'normal'); await tick(); assert.equal(completions().length,0);
-    b.context.chat[0].mes='final';c.finish(b.context.chat[0]);
-    await b.emit('CHARACTER_MESSAGE_RENDERED',0,'normal');await tick();
-    assert.equal(completions().length,1);
-    assert.equal(JSON.parse(completions()[0].init.body).requestId,marker.requestId);
-    assert.equal(JSON.parse(completions()[0].init.body).reviewCompleted,true);
-    await b.emit('CHARACTER_MESSAGE_RENDERED',0,'normal');await b.domEvent('visibilitychange');
-    assert.equal(completions().length,1);
+test('review scopes keep first server reply enabled and share IDs through rewrites without any receipt',async()=>{
+    const b=await browser();await b.emit('GENERATION_STARTED','normal');
+    const api=b.sandbox.sillyPopNotifications,a=api.beginReview('ttotto'),c=api.beginReview('hundredlog');
+    const marker=await nativeMarker(b);assert.equal(marker.enabled,true);assert.equal(marker.reviewPending,false);
+    const rewritten=JSON.parse(a.defer({body:JSON.stringify({type:'normal'})}).body).silly_pop_and;
+    assert.equal(rewritten.requestId,marker.requestId);
+    b.context.chat.push({mes:'final'});a.finish();c.finish(b.context.chat[0]);
+    await b.emit('CHARACTER_MESSAGE_RENDERED',0,'normal');await b.windowEvent('focus');
+    assert.equal(b.calls.filter(x=>String(x.input).endsWith('/review-completed')).length,0);
+    await b.emit('GENERATION_STARTED','normal');api.beginReview('ttotto');
+    const next=await nativeMarker(b);assert.notEqual(next.requestId,marker.requestId);
 });
 test('actual frontend rejects empty, user, wrong index, cancelled and changed-chat completion',async()=>{
     for(const scenario of ['empty','user','wrong-index','stop','chat-change','signal','wrong-message']) {
@@ -245,19 +239,12 @@ test('typed helper settings event cannot borrow a native reply frame',async()=>{
 });
 
 
-test('review receipt retries unsupported keepalive and a temporary failure without creating another generation',async()=>{
-    for(const mode of ['keepalive','temporary']) {
-        const options=mode==='keepalive'?{rejectReviewKeepalive:true}:{failReview:true};
-        const b=await browser(options);await b.emit('GENERATION_STARTED','normal');
-        const scope=b.sandbox.sillyPopNotifications.beginReview('ttotto');await nativeMarker(b);
-        b.context.chat.push({mes:'final'});scope.finish();
-        await b.emit('CHARACTER_MESSAGE_RENDERED',0,'normal');await tick();
-        options.failReview=false;
-        await b.windowEvent('focus');await tick();
-        const receipts=b.calls.filter(x=>String(x.input).endsWith('/review-completed'));
-        assert.equal(receipts.length,2,mode);
-        assert.equal(JSON.parse(receipts[0].init.body).requestId,JSON.parse(receipts[1].init.body).requestId);
-        await b.windowEvent('focus');assert.equal(b.calls.filter(x=>String(x.input).endsWith('/review-completed')).length,2);
-        assert.equal(b.calls.filter(x=>String(x.input)===PATH).length,0,'receipt retry never makes an AI request');
-    }
+test('cancelled review scopes disable late sends and never post completion receipts',async()=>{
+    const b=await browser();await b.emit('GENERATION_STARTED','normal');
+    const controller=new AbortController();
+    const scope=b.sandbox.sillyPopNotifications.beginReview('ttotto',{signal:controller.signal});
+    controller.abort();
+    const late=JSON.parse(scope.defer({body:'{"type":"normal"}'}).body).silly_pop_and;
+    assert.equal(late.enabled,false);assert.equal(late.reviewPending,false);
+    await b.windowEvent('focus');assert.equal(b.calls.filter(x=>String(x.input).endsWith('/review-completed')).length,0);
 });
