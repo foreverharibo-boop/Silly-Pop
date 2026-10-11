@@ -4,7 +4,7 @@ const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
 const { createReviewGate } = require('./review.cjs');
-const VERSION = '1.0.5';
+const VERSION = '1.0.6';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -59,7 +59,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
     function prune() {
         for (const [k, v] of pending) if (v.expires < now()) pending.delete(k);
         for (const [k, v] of states) if (now() - v.at > 86400000) states.delete(k);
-        for (const [k, v] of handled) if (now() - v > 600000) handled.delete(k);
+        for (const [k, v] of handled) if (now() - v > 86400000) handled.delete(k);
     }
     function status(owner) {
         const diagnostic = diagnostics.get(ownerKey(owner));

@@ -1,5 +1,5 @@
-import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.5';
-import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.5';
+import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.6';
+import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.6';
 const API = '/api/plugins/silly-pop-ios';
 const PWA = 'https://foreverharibo-boop.github.io/Silly-Pop/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -21,7 +21,7 @@ function initialize() {
     <div class="sp-actions"><button class="menu_button" data-test>테스트 알림</button><button class="menu_button" data-remove>선택 기기 해제</button></div>
     <details><summary>아이폰 처음 연결하기</summary><p>1. 연결 코드를 만든 뒤 아이폰 알림 앱에 붙여 넣어 주세요. 코드는 10분 동안 유효해요.</p><button class="menu_button" data-start>연결 코드 만들기</button><textarea data-code readonly aria-label="아이폰에 입력할 연결 코드"></textarea><button class="menu_button" data-copy>코드 복사</button>
     <p>2. 아이폰 홈 화면에 추가한 알림 앱에서 알림을 허용하고, 나온 완료 코드를 아래에 붙여 넣어 주세요.</p><textarea data-result placeholder="SPOP2.로 시작하는 완료 코드" aria-label="아이폰 연결 완료 코드"></textarea><button class="menu_button" data-finish>아이폰 연결 완료</button></details>
-    <small>화면을 나간 동안에도 답장을 받으려면 Silly Relay를 함께 켜 주세요. 또또·100LOG 검수를 켰다면 검수가 끝나 최종 답장이 표시된 뒤 알립니다. 브라우저가 멈추면 검수와 알림도 재개될 때까지 기다립니다. 소리와 진동은 아이폰 알림 설정을 따라요.</small></div></div>`;
+    <small>화면을 나간 동안에도 답장을 받으려면 Silly Relay를 함께 켜 주세요. 서버가 첫 정상 답장을 받으면 한 번 알립니다. 또또·100LOG 검수와 수정은 이후에도 이어질 수 있어요. 소리와 진동은 아이폰 알림 설정을 따라요.</small></div></div>`;
     const container = document.querySelector('#extensions_settings2') || document.querySelector('#extensions_settings');
     if (!container) return;
     container.append(panel);
@@ -77,10 +77,7 @@ function initialize() {
     // generations interrupt the generic lifecycle events. Never use a shared
     // one-shot "armed" flag to decide whether an outgoing reply is eligible.
     const replies = createReplyBinding();
-    const review = createReviewCoordinator({ context: ctx, snapshot, uuid, field: 'silly_pop_ios',
-        send: marker => api('/review-completed', marker, true),
-        report: error => say(`검수 완료 알림 전송 실패: ${error.message}`),
-    });
+    const review = createReviewCoordinator({ context: ctx, snapshot, uuid, field: 'silly_pop_ios' });
     registerReviewProvider(globalThis, 'ios', review);
     function markerFor(data, confirmed = false) {
         if (!data || typeof data !== 'object' || Array.isArray(data)
@@ -102,7 +99,6 @@ function initialize() {
     listen('GENERATION_ENDED', replies.ended);
     listen('GENERATION_STOPPED', () => { replies.clear(); review.clear(); });
     listen('CHAT_CHANGED', () => { replies.clear(); review.clear(); });
-    listen('CHARACTER_MESSAGE_RENDERED', review.rendered);
     listen('CHAT_COMPLETION_SETTINGS_READY', data => {
         if (!data || data.silly_pop_ios) return;
         const marker = markerFor(data, replies.confirmed(data));
@@ -114,10 +110,9 @@ function initialize() {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') lifecycleHidden = false;
         state();
-        void review.retry();
     });
     const hidden = () => { lifecycleHidden = true; state(); };
-    const restored = () => { lifecycleHidden = false; state(); void review.retry(); };
+    const restored = () => { lifecycleHidden = false; state(); };
     globalThis.addEventListener('pagehide', hidden);
     document.addEventListener('freeze', hidden);
     globalThis.addEventListener('pageshow', restored);
