@@ -82,6 +82,7 @@ function install(router, core) {
     router.post('/pair/finish', wrap((owner, body) => core.pairFinish(owner, body.code, body.name)));
     router.post('/remove', wrap((owner, body) => { core.remove(owner, body.id); return { ok: true }; }));
     router.post('/state', wrap((owner, body) => { core.updateState(owner, body); return { ok: true }; }));
+    router.post('/review-completed', wrap((owner, body) => core.reviewCompleted(owner, body)));
     router.post('/test', wrap((owner, body) => core.test(owner, body.id)));
 }
 let restore;
