@@ -402,6 +402,62 @@ async function nativeGenerate(client,payload) {
         assert.equal(notificationCalls().length, before + 1);
     }
 
+
+    // Review contracts share the same native turn, including quiet rewrites.
+    client.sandbox.document.visibilityState = 'hidden';
+    client.sandbox.document.hasFocus = () => false;
+    client.pageEvents.get('visibilitychange')();
+    await Promise.all([...requests]);
+    const api = client.sandbox.sillyPopNotifications;
+    assert.equal(api.apiVersion, 1);
+    for (const outcome of ['both', 'ttotto', 'hundredlog', 'cancel', 'empty', 'wrong-message', 'receipt-first']) {
+        client.context.chat.length = 0;
+        client.events.get('started')('normal', {}, false);
+        const before = notificationCalls().length;
+        const first = outcome === 'hundredlog' ? null : api.beginReview('ttotto');
+        const second = outcome === 'ttotto' ? null : api.beginReview('hundredlog', {index:0});
+        const held = await generate(client, {type:'normal'});
+        const marked = captured.at(-1).silly_pop;
+        assert.equal(marked.reviewPending, true);
+        const finalMessage = {is_user:false, mes:'FINAL REVIEWED REPLY'};
+        if (outcome !== 'receipt-first') {
+            held.response.end(outcome === 'empty' ? '{}' : '{"choices":[{"message":{"content":"DRAFT"}}]}');
+            await (await held.result).text();
+            await until(async () => (await status('mobile')).lastGeneration?.reason === (outcome === 'empty' ? 'no_reply' : 'review_pending'), 'review candidate was not held');
+        }
+        assert.equal(notificationCalls().length, before, 'draft must never notify');
+        client.context.chat.push(finalMessage);
+        first?.finish();
+        if (first && second) {
+            client.events.get('rendered')(0, 'normal');
+            await Promise.all([...requests]);
+            assert.equal(notificationCalls().length, before, 'first reviewer must not release another reviewer');
+        }
+        if (outcome === 'cancel') second?.cancel();
+        else second?.finish(finalMessage);
+        client.events.get('rendered')(outcome === 'wrong-message' ? 1 : 0, 'normal');
+        await Promise.all([...requests]);
+        if (outcome === 'receipt-first') {
+            assert.equal(notificationCalls().length, before, 'final receipt without server reply cannot notify');
+            held.response.end('{"choices":[{"message":{"content":"SERVER REPLY"}}]}');
+            await (await held.result).text();
+        }
+        if (['cancel','empty','wrong-message'].includes(outcome)) {
+            await delay(75);
+            assert.equal(notificationCalls().length, before, outcome + ' must not notify');
+        } else {
+            await until(() => notificationCalls().length === before + 1, 'reviewed final reply did not notify: ' + outcome);
+            client.events.get('rendered')(0, 'normal');
+            await Promise.all([...requests]);
+            const headers = {'Content-Type':'application/json'};
+            await fetch(baseUrl + '/api/plugins/silly-pop/review-completed', {method:'POST',headers,
+                body:JSON.stringify({...marked, reviewCompleted:true})});
+            await delay(50);
+            assert.equal(notificationCalls().length, before + 1, 'replayed completion must remain idempotent');
+        }
+        client.events.get('ended')();
+        await Promise.all([...requests]);
+    }
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur-only app switch, focus return, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();

@@ -9,7 +9,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.3';
+const VERSION = '2.4.4';
 const bridgeAuth = require('./bridge-auth.cjs');
 const {MAX_RESPONSE_BYTES, inspectResponse} = require('./reply-response.cjs');
 const PROTOCOL_VERSION = 1;
@@ -33,6 +33,8 @@ const handledRequests = new Map();
 const handledGenerations = new Map();
 const generationResults = new Map();
 const probeResults = new Map();
+const reviewedGenerations = new Map();
+const REVIEW_TTL_MS = 60 * 60 * 1000;
 let unmarkedGenerationAt = 0;
 let unmarkedGenerationType = '';
 const originalEnd = http.ServerResponse.prototype.end;
@@ -209,7 +211,7 @@ function getMarker(request) {
         generationId: cleanText(marker.generationId, 100),
         clientId: cleanText(marker.clientId, 100),
         stateTs: Number(marker.stateTs) || 0,
-        enabled: booleanValue(marker.enabled, true),
+        enabled: marker.reviewPending === true ? marker.reviewNotifyEnabled === true : booleanValue(marker.enabled, true),
         backgroundOnly: booleanValue(marker.backgroundOnly, true),
         sound: booleanValue(marker.sound, true),
         vibrate: booleanValue(marker.vibrate, true),
@@ -218,12 +220,16 @@ function getMarker(request) {
         url: safeUrl(marker.url),
         characterName: cleanText(marker.characterName || body?.char_name, 80),
         replySource: ['hundredlog', 'instead'].includes(marker.replySource) ? marker.replySource : '',
+        reviewPending: marker.reviewPending === true,
         // The actual request type takes precedence over a copied/stale marker.
         type: cleanText(body?.type || body?.params?.type || marker.type, 30).toLowerCase(),
     };
 }
 
 function pruneState(now = Date.now()) {
+    for (const [key, record] of reviewedGenerations) {
+        if (now - record.at > REVIEW_TTL_MS) reviewedGenerations.delete(key);
+    }
     for (const [id, state] of clientStates) {
         if (now - state.updatedAt > CLIENT_TTL_MS) clientStates.delete(id);
     }
@@ -263,8 +269,32 @@ function isExcludedRequest(marker) {
 }
 
 function recordGeneration(marker, reason, detail) {
-    generationResults.set(marker.clientId, {at: Date.now(), reason, detail});
-    console.log(`[Silly-Pop] 자동 알림: ${detail}`);
+    generationResults.set(marker.clientId, {at: Date.now(), reason, detail,
+        requestId: marker.requestId, generationId: marker.generationId, reviewPending: marker.reviewPending});
+    console.log(`[Silly-Pop] 자동 알림 (${marker.generationId || marker.requestId}): ${detail}`);
+}
+
+function reviewRecord(marker) {
+    const key = JSON.stringify([marker.clientId, marker.generationId]);
+    let record = reviewedGenerations.get(key);
+    if (!record) {
+        if (reviewedGenerations.size >= 512) return null;
+        record = {at: Date.now()};
+        reviewedGenerations.set(key, record);
+    }
+    return record;
+}
+
+async function settleReviewedReply(record) {
+    // A browser receipt alone is never evidence that the server received text.
+    // A server draft alone is never evidence that review finished.
+    if (!record?.candidate || !record.receipt || record.settled) return;
+    record.settled = true;
+    const marker = {...record.candidate, stateTs: record.receipt.stateTs,
+        visibleAtRequest: record.receipt.visibleAtRequest, enabled: record.receipt.enabled,
+        backgroundOnly: record.receipt.backgroundOnly, sound: record.receipt.sound,
+        vibrate: record.receipt.vibrate, url: record.receipt.url || record.candidate.url};
+    await dispatchCompletedReply(marker);
 }
 
 async function handleCompletedResponse(response, marker, record) {
@@ -272,7 +302,6 @@ async function handleCompletedResponse(response, marker, record) {
     pruneState(now);
     const requestKey = JSON.stringify([marker.clientId, marker.requestId]);
     if (handledRequests.has(requestKey)) return;
-    handledRequests.set(requestKey, now);
 
     if (isExcludedRequest(marker)) {
         recordGeneration(marker, 'excluded', '숨은 생성 또는 사용자 대필 요청이라 생략');
@@ -295,6 +324,23 @@ async function handleCompletedResponse(response, marker, record) {
         recordGeneration(marker, 'decode_error', '응답 압축을 해제하지 못해 알림 생략');
         return;
     }
+    handledRequests.set(requestKey, now);
+    if (marker.reviewPending) {
+        if (!marker.generationId) return;
+        const pending = reviewRecord(marker);
+        if (!pending) {
+            recordGeneration(marker, 'review_limit', '검수 대기 기록 한도에 도달하여 알림 생략');
+            return;
+        }
+        pending.candidate = marker;
+        recordGeneration(marker, 'review_pending', '답장 본문 수신 · 또또/100LOG 최종 완료 대기');
+        await settleReviewedReply(pending);
+        return;
+    }
+    await dispatchCompletedReply(marker);
+}
+
+async function dispatchCompletedReply(marker) {
     // Reserve synchronously before dispatch: concurrent requests/retries in the
     // same user generation must not race into two Android broadcasts.
     const generationKey = JSON.stringify([marker.clientId, marker.generationId || marker.requestId]);
@@ -427,6 +473,21 @@ async function init(router) {
         response.json({ok: true, result: {reason: 'retired', detail: '화면 게시 알림은 사용하지 않습니다. 서버 응답에서 알림을 보냅니다.'}});
     });
 
+    router.post('/review-completed', (request, response) => {
+        pruneState();
+        const marker = getMarker({body: {silly_pop: request.body}});
+        if (!marker?.generationId || !marker.reviewPending || request.body?.reviewCompleted !== true) {
+            return response.status(400).json({ok: false, accepted: false});
+        }
+        const pending = reviewRecord(marker);
+        if (!pending) return response.status(429).json({ok: false, accepted: false});
+        pending.receipt ??= marker;
+        void settleReviewedReply(pending).catch(error => {
+            recordGeneration(marker, 'failed', `검수 완료 알림 실패: ${cleanText(error.message, 100)}`);
+        });
+        response.json({ok: true, accepted: true});
+    });
+
     // GET is intentional: visibility changes may freeze a mobile browser immediately,
     // and a small keepalive GET is the most reliable way to record the final state.
     const updateState = (request, response) => {
@@ -483,6 +544,7 @@ async function exit() {
     handledGenerations.clear();
     generationResults.clear();
     probeResults.clear();
+    reviewedGenerations.clear();
     unmarkedGenerationAt = 0;
     unmarkedGenerationType = '';
     lastCompanionCheck = { checkedAt: 0, installed: false };
