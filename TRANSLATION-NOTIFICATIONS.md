@@ -8,7 +8,7 @@
 | Silly-Pop 서버 플러그인 | 2.4.6 |
 | 베르바 웹 확장 | 0.6.54 |
 | 베에르으바아 웹 확장 | 0.6.32 |
-| 공용 Verba Server | 0.1.1 |
+| 공용 Verba Server | 0.1.2 |
 
 모두 `codex/server-translation-experimental` 브랜치에만 적용했습니다. 일반 배포판에서 업데이트 버튼만 눌러서는 이 기능이 설치되지 않습니다. 번역기는 사용하는 쪽만 업데이트하면 됩니다. 공용 서버는 한 번만 설치합니다.
 
@@ -28,24 +28,18 @@ git -C "$HOME/SillyTavern/plugins/Silly-Pop" pull --ff-only origin codex/server-
 
 ### 2. 공용 Verba Server
 
-기존 서버를 `plugins` 밖으로 백업한 뒤 새 서버를 설치합니다. 아래는 `plugins/verba-server`가 이미 있는 경우입니다. 두 번역기에 공통이므로 한 번만 실행합니다.
+기존 설치 여부와 관계없이 아래 명령어를 실행합니다. 새 파일을 내려받고 기존 폴더의 프로그램 파일만 교체합니다. 폴더 삭제·백업은 필요 없습니다. 두 번역기에 공통이므로 한 번만 실행합니다.
 
 ```bash
 (
   set -e
-  verba_source_dir="$(mktemp -d "$HOME/verba-notify.XXXXXX")"
+  verba_source_dir="$(mktemp -d "$HOME/verba-update.XXXXXX")"
   git clone --depth 1 --branch codex/server-translation-experimental https://github.com/foreverharibo-boop/verba.git "$verba_source_dir/source"
-  verba_backup_dir="$(mktemp -d "$HOME/verba-server-backup.XXXXXX")"
-  mv "$HOME/SillyTavern/plugins/verba-server" "$verba_backup_dir/verba-server"
-  if ! bash "$verba_source_dir/source/install-server.sh" "$HOME/SillyTavern"; then
-    echo "설치 실패: 기존 서버는 $verba_backup_dir/verba-server 에 보관되어 있습니다. 서버를 시작하기 전에 확인해 주세요."
-    exit 1
-  fi
-  echo "기존 서버 백업: $verba_backup_dir/verba-server"
+  bash "$verba_source_dir/source/install-server.sh" "$HOME/SillyTavern"
 )
 ```
 
-처음 설치한다면 백업·이동 단계 없이 해당 번역기 실험판의 `install-server.sh`를 실행합니다. 자세한 초기 설치는 [서버 번역 안내](https://github.com/foreverharibo-boop/verba/blob/codex/server-translation-experimental/SERVER.md)를 참고합니다.
+자세한 설정은 [서버 번역 안내](https://github.com/foreverharibo-boop/verba/blob/codex/server-translation-experimental/SERVER.md)를 참고합니다.
 
 ### 3. 웹 확장
 
