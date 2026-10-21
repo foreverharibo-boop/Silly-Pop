@@ -58,7 +58,7 @@ async function run() {
     assert.notEqual(http.ServerResponse.prototype.end, originalEnd);
     const status = response();
     await routes.get.get('/status')({query:{refresh:'1'}}, status);
-    assert.equal(status.body.version, '2.4.5');
+    assert.equal(status.body.version, '2.4.6');
     const headerMarker={protocol:1,requestId:'header-test',clientId:'header-client',type:'normal',characterName:'한글 이름'};
     const headerRequest={headers:{'x-silly-pop':encodeURIComponent(JSON.stringify(headerMarker))},body:{type:'normal'}};
     assert.equal(api.getMarker(headerRequest).characterName,'한글 이름');
@@ -121,6 +121,13 @@ async function run() {
     assert.equal(dispatchedTest.body.ok, true);
     assert.equal(dispatchedTest.body.receiptConfirmed, false, 'Dispatch must not claim receipt');
     assert.equal(dispatchedTest.body.dispatchOnly, true);
+    const translationHook = globalThis[Symbol.for('silly-pop.translation-notifier')];
+    const notificationMarker = {protocol:1,clientId:'translation-tab',generationId:'one',type:'normal',
+        translationEnabled:true,visibleAtRequest:false,backgroundOnly:true,stateTs:10};
+    routes.get.get('/state')({user:{profile:{handle:'alice'}},query:{clientId:'translation-tab',ts:'11',translationEnabled:'0',visible:'0'}},response());
+    assert.equal((await translationHook.prepare('alice',notificationMarker)()).reason,'disabled');
+    // Bob's request cannot consume Alice's opt-out/visibility state.
+    assert.equal((await translationHook.prepare('bob',notificationMarker)()).reason,'dispatched');
     process.env.SILLY_POP_TEST_MODE = 'missing';
     assert.equal((await api.checkCompanion(true)).installed, false, 'result=0 cannot prove installation');
     await assert.rejects(api.runNotification({}), /앱 응답/);

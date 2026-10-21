@@ -40,8 +40,14 @@ assert(!source.includes('Notification.requestPermission'));
 assert(!source.includes('showNotification('));
 assert(!source.includes('st_rn_preview'));
 vm.runInNewContext(source.replaceAll('import.meta.url', JSON.stringify('https://local.test/extensions/silly-pop/index.js')) +
-    '\nglobalThis.api={retireBrowserNotifications,checkCompanion,needsBridgeUpdate,handleGenerationStarted,markGenerationPayload,getSettings}; settings=getSettings();',sandbox);
+    '\nglobalThis.api={retireBrowserNotifications,checkCompanion,needsBridgeUpdate,handleGenerationStarted,markGenerationPayload,getSettings,captureTranslation}; settings=getSettings();',sandbox);
 (async()=>{
+    assert.equal(sandbox.api.captureTranslation('normal'),null);
+    context.extensionSettings.response_notifier.translationEnabled=true;
+    const translation=sandbox.api.captureTranslation('normal');
+    assert.equal(translation.characterName,'Test');
+    assert.equal(translation.translationEnabled,true);
+    assert.equal(sandbox.api.captureTranslation('quiet'),null);
     const beforeStatus = {type:'normal'};
     sandbox.api.markGenerationPayload(beforeStatus);
     assert(beforeStatus.silly_pop, 'A real typed generation must be marked even before connection checks or GENERATION_STARTED');

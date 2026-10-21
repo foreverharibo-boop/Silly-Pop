@@ -19,6 +19,7 @@ const GENERATION_PATHS = new Set([
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
+    translationEnabled: false,
     backgroundOnly: true,
     sound: true,
     vibrate: true,
@@ -313,6 +314,11 @@ function makeCompanionMarker(type = activeGenerationType) {
     };
 }
 
+function captureTranslation(type = 'normal') {
+    if (!settings.translationEnabled || !['normal', 'regenerate', 'swipe', 'continue'].includes(type)) return null;
+    return { ...makeCompanionMarker(type), translationEnabled: true };
+}
+
 function markGenerationPayload(payload, dryRun = false) {
     if (dryRun || !payload || typeof payload !== 'object') return;
     // Typed requests are authoritative, even when another extension bypassed or
@@ -431,7 +437,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.7 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.8 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -503,6 +509,7 @@ async function sendCompanionState(urgent = false, forceHidden = false) {
         clientId,
         visible: !forceHidden && isPageForeground() ? '1' : '0',
         enabled: settings.enabled ? '1' : '0',
+        translationEnabled: settings.translationEnabled ? '1' : '0',
         backgroundOnly: settings.backgroundOnly ? '1' : '0',
         sound: settings.sound ? '1' : '0',
         vibrate: settings.vibrate ? '1' : '0',
@@ -579,6 +586,7 @@ function renderSettings() {
                     <details class="st-rn-generation-diagnostics"><summary>자동 알림 진단</summary><pre class="st-rn-generation-diagnostic st-rn-diagnostic"></pre></details>
                     <pre class="st-rn-diagnostic st-rn-server-diagnostic" hidden></pre>
                     <label class="st-rn-row" for="st_rn_enabled"><span><b>서버 응답 알림</b><small>Termux에서 AI 응답 수신이 끝나면 알림을 보냅니다. 검수·재작성은 이후에도 이어질 수 있어요.</small></span><input id="st_rn_enabled" type="checkbox" /></label>
+                    <label class="st-rn-row" for="st_rn_translation"><span><b>서버 번역 완료 알림</b><small>베르바·베에르으바아 서버 번역 실험판에서 답장 번역이 끝나면 한 번 더 알립니다. ‘다른 앱을 볼 때만’ 설정이 적용됩니다. Silly-Pop 서버 2.4.6 이상이 필요해요.</small></span><input id="st_rn_translation" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_background_only"><span><b>다른 앱을 볼 때만</b><small>실리태번을 보고 있을 때는 알림을 생략합니다.</small></span><input id="st_rn_background_only" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_sound"><span><b>알림 소리</b></span><input id="st_rn_sound" type="checkbox" /></label>
                     <label class="st-rn-row" for="st_rn_vibrate"><span><b>진동</b></span><input id="st_rn_vibrate" type="checkbox" /></label>
@@ -591,6 +599,7 @@ function renderSettings() {
 
     const root = document.getElementById('st_response_notifier_settings');
     bindSetting(root, 'st_rn_enabled', 'enabled');
+    bindSetting(root, 'st_rn_translation', 'translationEnabled');
     bindSetting(root, 'st_rn_background_only', 'backgroundOnly');
     bindSetting(root, 'st_rn_sound', 'sound');
     bindSetting(root, 'st_rn_vibrate', 'vibrate');
@@ -623,7 +632,7 @@ function renderSettings() {
 
 function initialize() {
     settings = getSettings();
-    globalThis.sillyPopNotifications = Object.freeze({ apiVersion: 1, beginReview: beginReviewedReply });
+    globalThis.sillyPopNotifications = Object.freeze({ apiVersion: 1, beginReview: beginReviewedReply, captureTranslation });
     installRequestHook();
     renderSettings();
 

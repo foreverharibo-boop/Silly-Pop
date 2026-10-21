@@ -9,7 +9,10 @@ const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const VERSION = '2.4.5';
+const VERSION = '2.4.6';
+const {createTranslationNotifier} = require('./translation-notifier.cjs');
+const TRANSLATION_HOOK = Symbol.for('silly-pop.translation-notifier');
+let translationNotifier;
 const bridgeAuth = require('./bridge-auth.cjs');
 const {MAX_RESPONSE_BYTES, inspectResponse} = require('./reply-response.cjs');
 const PROTOCOL_VERSION = 1;
@@ -404,6 +407,16 @@ const info = {
 
 async function init(router) {
     patchResponseEnd();
+    translationNotifier?.stop();
+    translationNotifier = createTranslationNotifier({
+        getState(owner, clientId) {
+            pruneState();
+            const state = clientStates.get(clientId);
+            return state?.owner === owner ? state : null;
+        },
+        send: runNotification,
+    });
+    globalThis[TRANSLATION_HOOK] = translationNotifier;
 
     router.get('/status', async (request, response) => {
         const status = await checkCompanion(request.query?.refresh === '1');
@@ -411,6 +424,7 @@ async function init(router) {
             ok: true,
             version: VERSION,
             protocol: PROTOCOL_VERSION,
+            translationNotifications: true,
             appInstalled: status.installed,
             bridgeCommand: bridgeCommandExists(),
             appReady: Boolean(status.transportReady && status.notificationAllowed !== false),
@@ -455,6 +469,8 @@ async function init(router) {
         }
         clientStates.set(clientId, {
             clientTimestamp,
+            owner: request.user?.profile?.handle || '',
+            translationEnabled: booleanValue(input.translationEnabled, false),
             visible: booleanValue(input.visible, true),
             enabled: booleanValue(input.enabled, true),
             backgroundOnly: booleanValue(input.backgroundOnly, true),
@@ -491,6 +507,8 @@ async function init(router) {
 
 async function exit() {
     restoreResponseEnd();
+    translationNotifier?.stop();
+    if (globalThis[TRANSLATION_HOOK] === translationNotifier) delete globalThis[TRANSLATION_HOOK];
     clientStates.clear();
     handledRequests.clear();
     handledGenerations.clear();
