@@ -40,7 +40,7 @@ assert(!source.includes('Notification.requestPermission'));
 assert(!source.includes('showNotification('));
 assert(!source.includes('st_rn_preview'));
 vm.runInNewContext(source.replaceAll('import.meta.url', JSON.stringify('https://local.test/extensions/silly-pop/index.js')) +
-    '\nglobalThis.api={retireBrowserNotifications,checkCompanion,needsBridgeUpdate,handleGenerationStarted,markGenerationPayload,getSettings,captureTranslation}; settings=getSettings();',sandbox);
+    '\nglobalThis.api={retireBrowserNotifications,checkCompanion,needsBridgeUpdate,handleGenerationStarted,markGenerationPayload,getSettings,captureTranslation,registerNotificationBridge}; settings=getSettings();',sandbox);
 (async()=>{
     assert.equal(sandbox.api.captureTranslation('normal'),null);
     context.extensionSettings.response_notifier.translationEnabled=true;
@@ -48,6 +48,18 @@ vm.runInNewContext(source.replaceAll('import.meta.url', JSON.stringify('https://
     assert.equal(translation.characterName,'Test');
     assert.equal(translation.translationEnabled,true);
     assert.equal(sandbox.api.captureTranslation('quiet'),null);
+    sandbox.api.registerNotificationBridge();
+    const bridge = vm.runInNewContext("globalThis[Symbol.for('silly-pop.apk.notifications.v1')]", sandbox);
+    sandbox.sillyPopNotifications = { captureTranslation: () => null };
+    assert.equal(bridge.captureTranslation('normal').translationEnabled, true);
+    const originalSettings = context.extensionSettings.response_notifier;
+    context.extensionSettings.response_notifier = { ...originalSettings, translationEnabled:false };
+    assert.equal(bridge.captureTranslation('normal'), null, 'live OFF wins over the old object');
+    context.extensionSettings.response_notifier = { ...originalSettings, translationEnabled:true, enabled:false };
+    assert.equal(bridge.captureTranslation('normal').translationEnabled, true, 'translation opt-in is independent of reply notifications');
+    assert.equal(bridge.captureTranslation('normal').enabled, false);
+    context.extensionSettings.response_notifier = originalSettings;
+
     const beforeStatus = {type:'normal'};
     sandbox.api.markGenerationPayload(beforeStatus);
     assert(beforeStatus.silly_pop, 'A real typed generation must be marked even before connection checks or GENERATION_STARTED');

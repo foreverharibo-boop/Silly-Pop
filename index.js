@@ -294,6 +294,7 @@ function isNotifiableGeneration(type) {
 }
 
 function makeCompanionMarker(type = activeGenerationType) {
+    settings = getSettings();
     const context = getContext();
     const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const frame = generationFrames.at(-1);
@@ -314,7 +315,14 @@ function makeCompanionMarker(type = activeGenerationType) {
     };
 }
 
+function registerNotificationBridge() {
+    const bridge = Object.freeze({ apiVersion: 1, beginReview: beginReviewedReply, captureTranslation });
+    globalThis[Symbol.for('silly-pop.apk.notifications.v1')] = bridge;
+    globalThis.sillyPopNotifications = bridge;
+}
+
 function captureTranslation(type = 'normal') {
+    settings = getSettings();
     if (!settings.translationEnabled || !['normal', 'regenerate', 'swipe', 'continue'].includes(type)) return null;
     return { ...makeCompanionMarker(type), translationEnabled: true };
 }
@@ -437,7 +445,7 @@ function updateCompanionStatus() {
     badge.textContent = companionState.ready ? (companionState.dispatchOnly ? '전송 준비됨' : '연결됨') : companionState.installed ? '준비 필요' : '연결 안 됨';
     detail.textContent = companionState.detail;
     root.querySelector('.st-rn-versions').textContent =
-        `확장 1.5.8 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
+        `확장 1.5.9 · 서버 ${companionState.version || '미연결'} · 앱 ${companionState.appVersion || (companionState.dispatchOnly ? '자동 확인 미지원' : '미확인')}`;
     const generationDetail = root.querySelector('.st-rn-generation-detail');
     if (generationDetail) generationDetail.textContent = companionState.generationDetail || '최근 답변: 감지 기록 없음';
     const diagnostic = root.querySelector('.st-rn-server-diagnostic');
@@ -504,6 +512,7 @@ async function checkCompanion(force = false) {
 }
 
 async function sendCompanionState(urgent = false, forceHidden = false) {
+    settings = getSettings();
     if (!companionState.installed) return;
     const params = new URLSearchParams({
         clientId,
@@ -558,6 +567,7 @@ function bindSetting(root, id, key) {
     const input = root.querySelector(`#${id}`);
     input.checked = Boolean(settings[key]);
     input.addEventListener('change', () => {
+        settings = getSettings();
         settings[key] = input.checked;
         saveSettings();
         void sendCompanionState();
@@ -632,7 +642,7 @@ function renderSettings() {
 
 function initialize() {
     settings = getSettings();
-    globalThis.sillyPopNotifications = Object.freeze({ apiVersion: 1, beginReview: beginReviewedReply, captureTranslation });
+    registerNotificationBridge();
     installRequestHook();
     renderSettings();
 
