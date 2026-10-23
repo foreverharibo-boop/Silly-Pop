@@ -454,6 +454,18 @@ async function nativeGenerate(client,payload) {
     await until(()=>pending.length>beforePending,'legacy request');
     pending.at(-1).end('{"choices":[{"message":{"content":"FIRST REPLY"}}]}');await (await legacyResponse).text();
     await until(()=>notificationCalls().length===beforeLegacy+1,'legacy deferred marker must not stall');
+    // The translation hook is separate from original-reply deduplication.
+    // Simulate a completed server translation after that original response.
+    const translate = globalThis[Symbol.for('silly-pop.translation-notifier')].prepare('default-user', {
+        ...legacy, translationEnabled:true, characterName:'Test', stateTs:1,
+    });
+    assert.equal((await translate()).reason,'dispatched');
+    assert.equal(notificationCalls().length,beforeLegacy+2);
+    const translationArgs=notificationCalls().at(-1);
+    const translationPayload=JSON.parse(translationArgs[translationArgs.indexOf('payload')+1]);
+    assert.equal(translationPayload.title,'Test의 답장 번역이 완료됐어요');
+    assert.equal((await translate()).reason,'duplicate');
+    assert.equal(notificationCalls().length,beforeLegacy+2);
     console.log('Automatic generation integration tests passed (HTTP/SSE, suspended page, reordered state, blur-only app switch, focus return, direct swipe, deduplication, foreground, auxiliary quiet exclusion, errors, 100LOG/inSTead server replies, nested rewrite deduplication, retired publication callbacks).');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{
     for(const response of pending) if(!response.writableEnded) response.end();
