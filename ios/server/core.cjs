@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
-const VERSION = '1.0.4';
+const { createReviewGate } = require('./review.cjs');
+const VERSION = '1.0.7';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -58,7 +59,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
     function prune() {
         for (const [k, v] of pending) if (v.expires < now()) pending.delete(k);
         for (const [k, v] of states) if (now() - v.at > 86400000) states.delete(k);
-        for (const [k, v] of handled) if (now() - v > 600000) handled.delete(k);
+        for (const [k, v] of handled) if (now() - v > 86400000) handled.delete(k);
     }
     function status(owner) {
         const diagnostic = diagnostics.get(ownerKey(owner));
@@ -153,7 +154,17 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         testing.set(key, now());
         return deliver(owner, deviceId, true);
     }
+    const reviews = createReviewGate({ now, deliver: dispatchCompleted, note: recordResponse,
+        valid: (owner, marker) => marker?.v === 1 && ID.test(marker.requestId || '')
+            && ID.test(marker.clientId || '') && ID.test(marker.deviceId || '')
+            && Number.isFinite(marker.ts) && marker.ts >= 0 && marker.ts <= now() + 60000
+            && devices(owner).some(device => device.id === marker.deviceId),
+    });
     async function completed(owner, marker) {
+        if (marker?.reviewPending === true) return reviews.capture(owner, marker);
+        return dispatchCompleted(owner, marker);
+    }
+    async function dispatchCompleted(owner, marker) {
         prune();
         if (!marker || marker.v !== 1 || !ID.test(marker.requestId || '') || !ID.test(marker.clientId || '') || !ID.test(marker.deviceId || '')) {
             recordResponse(owner, marker, 'invalid_marker', '생성 요청의 iOS 알림 표시가 올바르지 않아요.');
@@ -174,6 +185,6 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         try { await deliver(owner, marker.deviceId, false, marker.requestId.slice(0, 8), marker.characterName); }
         catch { /* Notification failure never cancels generation or recovery. */ }
     }
-    return { status, pairStart, pairFinish, remove, updateState, completed, test, recordResponse };
+    return { status, pairStart, pairFinish, remove, updateState, completed, reviewCompleted: reviews.completed, test, recordResponse };
 }
 module.exports = { createCore, encode, decode, validateSubscription, VERSION };
