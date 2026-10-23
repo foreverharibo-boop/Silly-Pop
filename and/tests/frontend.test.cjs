@@ -37,7 +37,7 @@ async function browser(options = {}) {
     vm.runInNewContext(fs.readFileSync(require.resolve('../extension/index.js'), 'utf8').replace(/^import [^\r\n]*\r?\n/gm, ''), sandbox);
     // Allow the initial status fetch to finish before running a generation.
     await new Promise(resolve => setImmediate(resolve));
-    return { sandbox, context, calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
+    return { bridge:vm.runInNewContext("globalThis[Symbol.for('silly-pop.and.notifications.v1')]",sandbox), sandbox, context, calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
         focus: value => { focused = value; },
         visibility: value => { sandbox.document.visibilityState = value; },
         windowEvent: async name => { windowHandlers.get(name)?.(); await new Promise(resolve => setImmediate(resolve)); },
@@ -247,4 +247,15 @@ test('cancelled review scopes disable late sends and never post completion recei
     const late=JSON.parse(scope.defer({body:'{"type":"normal"}'}).body).silly_pop_and;
     assert.equal(late.enabled,false);assert.equal(late.reviewPending,false);
     await b.windowEvent('focus');assert.equal(b.calls.filter(x=>String(x.input).endsWith('/review-completed')).length,0);
+});
+
+test('translation bridge is opt-in, independent of reply notices, and captures metadata only',async()=>{
+ const b=await browser();const bridge=b.bridge;
+ assert.equal(bridge.captureTranslation('normal'),null);
+ const toggle=b.elements.get('[data-translation]');toggle.checked=true;toggle.change();
+ const reply=b.elements.get('[data-enabled]');reply.checked=false;reply.change();
+ const marker=bridge.captureTranslation('normal');assert.equal(marker.translationEnabled,true);assert.equal(marker.enabled,false);
+ assert.equal(marker.deviceId,'d'.repeat(32));assert.equal(marker.characterName,'Speaker');assert.equal(marker.text,undefined);
+ assert.equal(bridge.captureTranslation('quiet'),null);assert.equal(bridge.captureTranslation('impersonate'),null);
+ toggle.checked=false;toggle.change();assert.equal(bridge.captureTranslation('normal'),null);
 });

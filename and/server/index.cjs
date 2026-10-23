@@ -86,10 +86,14 @@ function install(router, core) {
     router.post('/test', wrap((owner, body) => core.test(owner, body.id)));
 }
 let restore;
+let translationHook;
+const TRANSLATION_HOOK = Symbol.for('silly-pop.and.translation-notifier.v1');
 async function init(router) {
     const core = createCore({ directory: path.join(os.homedir(), '.config', 'silly-pop-and') });
+    translationHook = { apiVersion:1, prepare:(owner, marker)=>core.prepareTranslation(owner, marker) };
+    globalThis[TRANSLATION_HOOK] = translationHook;
     install(router, core);
     restore = observe(core);
     console.log(`[Silly-Pop AND] ${VERSION} loaded`);
 }
-module.exports = { info: { id: 'silly-pop-and', name: 'Silly-Pop AND', description: 'Separate Google Web Push companion; no Android bridge changes' }, init, exit: async () => restore?.(), install, observe, successfulReply };
+module.exports = { info: { id: 'silly-pop-and', name: 'Silly-Pop AND', description: 'Separate Google Web Push companion; no Android bridge changes' }, init, exit: async () => { restore?.(); if (globalThis[TRANSLATION_HOOK] === translationHook) delete globalThis[TRANSLATION_HOOK]; }, install, observe, successfulReply };

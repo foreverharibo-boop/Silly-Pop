@@ -61,7 +61,7 @@ test('worker activation deletes only old AND caches and preserves iOS caches', a
     const events = {}, deleted = [];
     const self = { addEventListener: (name, fn) => events[name] = fn, clients: { claim: async () => {} } };
     vm.runInNewContext(fs.readFileSync(require.resolve('../../docs/and/sw.js'), 'utf8'), { self, URL, caches: {
-        keys: async () => ['silly-pop-ios-v1.0.0', 'silly-pop-and-old', 'silly-pop-and-v1.0.0', 'silly-pop-and-v1.0.1', 'silly-pop-and-v1.0.2', 'other'],
+        keys: async () => ['silly-pop-ios-v1.0.0', 'silly-pop-and-old', 'silly-pop-and-v1.0.0', 'silly-pop-and-v1.0.1', 'silly-pop-and-v1.0.3', 'other'],
         delete: async key => deleted.push(key),
     } });
     let waiting; events.activate({ waitUntil: p => waiting = p }); await waiting;

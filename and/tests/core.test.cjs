@@ -129,3 +129,35 @@ test('reply push carries the APK title and bounded character name; missing names
     assert.equal(payload.title, 'Silly-Pop 테스트');
     assert.equal(payload.characterName, undefined);
 });
+
+test('translation notifications use a separate completion key, respect opt-in, and never expose reply text', async t => {
+ const f=fixture(t),device=f.pair();
+ const marker={...f.marker(device.id),type:'normal',generationId:'translation-1',translationEnabled:true,characterName:'Test',text:'PRIVATE_REPLY'};
+ await f.core.completed('alice',{...marker,translationPending:true});assert.equal(f.sent.length,0);
+ const complete=f.core.prepareTranslation('alice',marker);assert.equal(typeof complete,'function');
+ marker.characterName='Changed';await complete();await complete();assert.equal(f.sent.length,1);
+ const payload=JSON.parse(f.sent[0][1]);assert.equal(payload.title,'Test의 답장 번역이 완료됐어요');assert.doesNotMatch(f.sent[0][1],/PRIVATE_REPLY|Changed/);
+ assert.equal(f.core.prepareTranslation('bob',marker),null);
+ assert.equal(f.core.prepareTranslation('alice',{...marker,translationEnabled:false}),null);
+ const next={...marker,generationId:'translation-2'};
+ const pending=f.core.prepareTranslation('alice',next);
+ f.core.updateState('alice',{...next,ts:next.ts+1,translationEnabled:false});
+ await pending();assert.equal(f.sent.length,1,'turning translation notices off suppresses pending delivery');
+});
+test('translation push failure leaves normal reply notification working',async t=>{
+ let fail=true;const f=fixture(t,{send:async()=>{if(fail)throw Error('offline');}}),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'translation-1',translationEnabled:true};
+ assert.equal((await f.core.prepareTranslation('alice',m)()).reason,'delivery_failed');
+ fail=false;await f.core.completed('alice',m);assert.equal(f.core.status('alice').last.result,'accepted');
+});
+
+test('deferred arrival can fall back to one normal notice after skipped or failed translation',async t=>{
+ const f=fixture(t),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'translation-fallback',translationEnabled:true};
+ await f.core.completed('alice',{...m,translationPending:true});assert.equal(f.sent.length,0);
+ const complete=f.core.prepareTranslation('alice',m);
+ await complete.replyReady();await complete.replyReady();assert.equal(f.sent.length,1);
+ const payload=JSON.parse(f.sent[0][1]);assert.equal(payload.title,'답장이 도착했어요');assert.equal(payload.kind,undefined);
+ const disabled=f.core.prepareTranslation('alice',{...m,generationId:'disabled',enabled:false});
+ await disabled.replyReady();assert.equal(f.sent.length,1);
+});
