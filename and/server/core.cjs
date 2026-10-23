@@ -4,7 +4,7 @@ const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
 const { createReviewGate } = require('./review.cjs');
-const VERSION = '1.0.6';
+const VERSION = '1.0.7';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -161,7 +161,8 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
             && devices(owner).some(device => device.id === marker.deviceId),
     });
     async function completed(owner, marker) {
-        if (marker?.translationPending === true) { recordResponse(owner, marker, 'translation_pending', '서버 번역 완료 알림을 기다립니다.'); return; }
+        // Older Relay/Verba servers still attach translationPending. Reply and
+        // translation notices now honor their own opt-ins independently.
         if (marker?.reviewPending === true) return reviews.capture(owner, marker);
         return dispatchCompleted(owner, marker);
     }
@@ -199,10 +200,14 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
             backgroundOnly:marker.backgroundOnly!==false, visible:marker.visible!==false,
             characterName:String(marker.characterName || '').replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,80) };
         const complete = () => dispatchCompleted(owner, snapshot, true);
-        complete.replyReady = () => dispatchCompleted(owner, snapshot);
+        // Compatibility with Verba's old skipped/failed-translation fallback.
+        // The inspected original response owns reply delivery and its ID;
+        // this translation-derived ID must never emit a second reply notice.
+        complete.replyReady = async () => ({ reason: 'independent_reply' });
         return complete;
     }
     return { prepareTranslation, status, pairStart, pairFinish, remove, updateState, completed, reviewCompleted: reviews.completed, test, recordResponse };
 }
 module.exports = { createCore, encode, decode, validateSubscription, VERSION };
+
 

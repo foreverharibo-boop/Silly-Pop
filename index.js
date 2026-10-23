@@ -1,5 +1,5 @@
-import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.6';
-import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.6';
+import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.7';
+import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.7';
 const API = '/api/plugins/silly-pop-and';
 const PWA = 'https://silly-pop.pages.dev/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -19,7 +19,7 @@ function initialize() {
     <label>알림 받을 안드로이드 <select data-device><option value="">연결된 기기 없음</option></select></label>
     <label class="checkbox_label"><input type="checkbox" data-enabled><span>이 브라우저에서 보낸 답장 알림</span></label>
     <label class="checkbox_label"><input type="checkbox" data-translation><span>서버 번역 완료 알림</span></label>
-    <small>릴레이에서 이 실리팝을 선택하고 베르바·긴르바 서버 번역을 켜면 사용합니다. 번역 작업이 접수되면 일반 답장 알림 대신 번역 완료 시 알립니다.</small>
+    <small>릴레이에서 이 실리팝을 선택하고 베르바·긴르바 서버 번역을 켜면 사용합니다. 답장 알림과 별도로 켜고 끌 수 있습니다. 둘 다 켜면 답장 도착과 서버 번역 완료 때 각각 알립니다.</small>
     <label class="checkbox_label"><input type="checkbox" data-background><span>다른 화면을 볼 때만</span></label>
     <div class="sp-actions"><button class="menu_button" data-test>테스트 알림</button><button class="menu_button" data-remove>선택 기기 해제</button></div>
     <details><summary>안드로이드 처음 연결하기</summary><p>1. 연결 코드를 만든 뒤 안드로이드 알림 앱에 붙여 넣어 주세요. 코드는 10분 동안 유효해요.</p><button class="menu_button" data-start>연결 코드 만들기</button><textarea data-code readonly aria-label="안드로이드에 입력할 연결 코드"></textarea><button class="menu_button" data-copy>코드 복사</button>
@@ -147,4 +147,5 @@ function initialize() {
     save(); void check().catch(e => say(e.message));
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true }); else initialize();
+
 
