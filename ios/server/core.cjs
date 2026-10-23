@@ -4,7 +4,7 @@ const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
 const { createReviewGate } = require('./review.cjs');
-const VERSION = '1.0.7';
+const VERSION = '1.0.8';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');
@@ -104,7 +104,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         if (!Number.isFinite(input.ts) || input.ts < 0 || input.ts > now() + 60000) throw err(400, '기기 시간을 확인해 주세요.');
         if (old && input.ts <= old.ts) return;
         if (!old && states.size >= 1024) throw err(429, '상태 기록 한도입니다.');
-        states.set(key, { deviceId: input.deviceId, ts: input.ts, enabled: input.enabled === true, visible: input.visible === true, backgroundOnly: input.backgroundOnly !== false, at: now() });
+        states.set(key, { deviceId: input.deviceId, ts: input.ts, enabled: input.enabled === true, visible: input.visible === true, backgroundOnly: input.backgroundOnly !== false, translationEnabled: input.translationEnabled === true, at: now() });
     }
     function note(owner, state) {
         const kind = state.kind === 'test' ? 'test' : 'reply';
@@ -118,7 +118,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         const requestId = ID.test(marker?.requestId || '') ? marker.requestId.slice(0, 8) : undefined;
         note(owner, { kind: 'reply', result, message, requestId });
     }
-    async function deliver(owner, deviceId, isTest = false, requestId, value) {
+    async function deliver(owner, deviceId, isTest = false, requestId, value, translation = false) {
         const characterName = isTest ? '' : (typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '');
         const kind = isTest ? 'test' : 'reply';
         const device = devices(owner).find(d => d.id === deviceId);
@@ -132,7 +132,7 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
         }
         inFlight++;
         try {
-            await send(device.subscription, JSON.stringify({ v: 1, title: isTest ? 'Silly-Pop 테스트' : characterName ? `${characterName}의 답장이 도착했어요` : '답장이 도착했어요', ...(characterName ? { characterName } : {}), body: isTest ? '아이폰 알림 연결을 확인했어요.' : '', id: token() }), {
+            await send(device.subscription, JSON.stringify({ v: 1, ...(translation ? { kind:'translation' } : {}), title: isTest ? 'Silly-Pop 테스트' : translation ? (characterName ? `${characterName}의 답장 번역이 완료됐어요` : '답장 번역이 완료됐어요') : characterName ? `${characterName}의 답장이 도착했어요` : '답장이 도착했어요', ...(characterName ? { characterName } : {}), body: isTest ? '아이폰 알림 연결을 확인했어요.' : '', id: token() }), {
                 vapidDetails: { subject: 'https://github.com/foreverharibo-boop/Silly-Pop', ...data.vapid },
                 TTL: 300, urgency: 'high', timeout: 10000,
             });
@@ -161,30 +161,47 @@ function createCore({ directory, send = webpush.sendNotification.bind(webpush), 
             && devices(owner).some(device => device.id === marker.deviceId),
     });
     async function completed(owner, marker) {
+        if (marker?.translationPending === true) { recordResponse(owner, marker, 'translation_pending', '서버 번역 완료 알림을 기다립니다.'); return; }
         if (marker?.reviewPending === true) return reviews.capture(owner, marker);
         return dispatchCompleted(owner, marker);
     }
-    async function dispatchCompleted(owner, marker) {
+    async function dispatchCompleted(owner, marker, translation = false) {
         prune();
         if (!marker || marker.v !== 1 || !ID.test(marker.requestId || '') || !ID.test(marker.clientId || '') || !ID.test(marker.deviceId || '')) {
             recordResponse(owner, marker, 'invalid_marker', '생성 요청의 iOS 알림 표시가 올바르지 않아요.');
             return;
         }
-        if (marker.enabled !== true) { recordResponse(owner, marker, 'disabled', '요청 시점에 답장 알림이 꺼져 있어 생략했어요.'); return; }
-        const key = stateKey(owner, marker.requestId);
-        if (handled.has(key)) return;
+        if ((translation ? marker.translationEnabled : marker.enabled) !== true) { recordResponse(owner, marker, 'disabled', '요청 시점에 답장 알림이 꺼져 있어 생략했어요.'); return { reason:'disabled' }; }
+        const key = stateKey(owner, (translation ? 'translation:' : '') + marker.requestId);
+        if (handled.has(key)) return { reason: 'duplicate' };
         if (handled.size >= 4096) { recordResponse(owner, marker, 'tracking_limit', '알림 처리 기록 한도에 도달했어요.'); return; }
         handled.set(key, now());
         const live = states.get(stateKey(owner, marker.clientId));
         const state = live && live.ts >= marker.ts && live.deviceId === marker.deviceId ? live : marker;
-        if (state.enabled !== true || (state.backgroundOnly !== false && state.visible !== false)) {
-            recordResponse(owner, marker, 'skipped', state.enabled !== true
+        if ((translation ? state.translationEnabled : state.enabled) !== true || (state.backgroundOnly !== false && state.visible !== false)) {
+            recordResponse(owner, marker, 'skipped', (translation ? state.translationEnabled : state.enabled) !== true
                 ? '답장 알림이 꺼져 있어 생략했어요.' : '메시지를 보낸 기기가 실리 화면을 보고 있어 생략했어요.');
-            return;
+            return { reason:(translation ? state.translationEnabled : state.enabled) !== true ? 'disabled' : 'foreground' };
         }
-        try { await deliver(owner, marker.deviceId, false, marker.requestId.slice(0, 8), marker.characterName); }
-        catch { /* Notification failure never cancels generation or recovery. */ }
+        try { await deliver(owner, marker.deviceId, false, marker.requestId.slice(0, 8), marker.characterName, translation); return { reason: 'dispatched' }; }
+        catch { return { reason: 'delivery_failed' }; }
     }
-    return { status, pairStart, pairFinish, remove, updateState, completed, reviewCompleted: reviews.completed, test, recordResponse };
+    function prepareTranslation(owner, marker) {
+        if (marker?.v !== 1 || marker.translationEnabled !== true
+            || !['normal','regenerate','swipe','continue'].includes(marker.type)
+            || !ID.test(marker.clientId || '') || !ID.test(marker.deviceId || '')
+            || !devices(owner).some(d => d.id === marker.deviceId)
+            || !Number.isFinite(marker.ts) || marker.ts < 0 || marker.ts > now() + 60000
+            || typeof marker.generationId !== 'string' || !marker.generationId || marker.generationId.length > 100) return null;
+        const snapshot = { v:1, clientId:marker.clientId, deviceId:marker.deviceId,
+            requestId:hash(marker.generationId).slice(0,32), ts:marker.ts,
+            enabled:marker.enabled===true, translationEnabled:true,
+            backgroundOnly:marker.backgroundOnly!==false, visible:marker.visible!==false,
+            characterName:String(marker.characterName || '').replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,80) };
+        const complete = () => dispatchCompleted(owner, snapshot, true);
+        complete.replyReady = () => dispatchCompleted(owner, snapshot);
+        return complete;
+    }
+    return { prepareTranslation, status, pairStart, pairFinish, remove, updateState, completed, reviewCompleted: reviews.completed, test, recordResponse };
 }
 module.exports = { createCore, encode, decode, validateSubscription, VERSION };
