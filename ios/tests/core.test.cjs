@@ -116,16 +116,16 @@ test('reply push carries the APK title and bounded character name; missing names
 test('translation notifications use a separate completion key, respect opt-in, and never expose reply text', async t => {
  const f=fixture(t),device=f.pair();
  const marker={...f.marker(device.id),type:'normal',generationId:'translation-1',translationEnabled:true,characterName:'Test',text:'PRIVATE_REPLY'};
- await f.core.completed('alice',{...marker,translationPending:true});assert.equal(f.sent.length,0);
+ await f.core.completed('alice',{...marker,translationPending:true});assert.equal(f.sent.length,1);
  const complete=f.core.prepareTranslation('alice',marker);assert.equal(typeof complete,'function');
- marker.characterName='Changed';await complete();await complete();assert.equal(f.sent.length,1);
- const payload=JSON.parse(f.sent[0][1]);assert.equal(payload.title,'Test의 답장 번역이 완료됐어요');assert.doesNotMatch(f.sent[0][1],/PRIVATE_REPLY|Changed/);
+ marker.characterName='Changed';await complete();await complete();assert.equal(f.sent.length,2);
+ const payload=JSON.parse(f.sent[1][1]);assert.equal(payload.title,'Test의 답장 번역이 완료됐어요');assert.doesNotMatch(f.sent[1][1],/PRIVATE_REPLY|Changed/);
  assert.equal(f.core.prepareTranslation('bob',marker),null);
  assert.equal(f.core.prepareTranslation('alice',{...marker,translationEnabled:false}),null);
  const next={...marker,generationId:'translation-2'};
  const pending=f.core.prepareTranslation('alice',next);
  f.core.updateState('alice',{...next,ts:next.ts+1,translationEnabled:false});
- await pending();assert.equal(f.sent.length,1,'turning translation notices off suppresses pending delivery');
+ await pending();assert.equal(f.sent.length,2,'turning translation notices off suppresses pending delivery');
 });
 test('translation push failure leaves normal reply notification working',async t=>{
  let fail=true;const f=fixture(t,{send:async()=>{if(fail)throw Error('offline');}}),device=f.pair();
@@ -134,13 +134,73 @@ test('translation push failure leaves normal reply notification working',async t
  fail=false;await f.core.completed('alice',m);assert.equal(f.core.status('alice').last.result,'accepted');
 });
 
-test('deferred arrival can fall back to one normal notice after skipped or failed translation',async t=>{
+test('legacy translation fallback cannot duplicate an independent arrival notice',async t=>{
  const f=fixture(t),device=f.pair();
  const m={...f.marker(device.id),type:'normal',generationId:'translation-fallback',translationEnabled:true};
- await f.core.completed('alice',{...m,translationPending:true});assert.equal(f.sent.length,0);
+ await f.core.completed('alice',{...m,translationPending:true});assert.equal(f.sent.length,1);
  const complete=f.core.prepareTranslation('alice',m);
  await complete.replyReady();await complete.replyReady();assert.equal(f.sent.length,1);
  const payload=JSON.parse(f.sent[0][1]);assert.equal(payload.title,'답장이 도착했어요');assert.equal(payload.kind,undefined);
  const disabled=f.core.prepareTranslation('alice',{...m,generationId:'disabled',enabled:false});
  await disabled.replyReady();assert.equal(f.sent.length,1);
+});
+
+
+for (const enabled of [false, true]) for (const translationEnabled of [false, true]) {
+ test(`reply and translation opt-ins are independent (reply=${enabled}, translation=${translationEnabled})`, async t => {
+  const f=fixture(t), device=f.pair();
+  const m={...f.marker(device.id),type:'normal',generationId:'independent-flags',enabled,translationEnabled,translationPending:true};
+  await Promise.all([f.core.completed('alice',m),f.core.completed('alice',m)]);
+  const complete=f.core.prepareTranslation('alice',m);
+  if(complete){await Promise.all([complete(),complete()]);await complete.replyReady();}
+  else assert.equal(translationEnabled,false);
+  const payloads=f.sent.map(row=>JSON.parse(row[1]));
+  assert.equal(payloads.filter(p=>p.kind!=='translation').length,Number(enabled));
+  assert.equal(payloads.filter(p=>p.kind==='translation').length,Number(translationEnabled));
+ });
+}
+test('reply failure does not block translation and failed sends are not retried by fallback',async t=>{
+ const attempts=[];const f=fixture(t,{send:async(_sub,payload)=>{attempts.push(JSON.parse(payload));if(!JSON.parse(payload).kind)throw Error('reply offline');}}),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'reply-failed',translationEnabled:true,translationPending:true};
+ assert.equal((await f.core.completed('alice',m)).reason,'delivery_failed');
+ const complete=f.core.prepareTranslation('alice',m);
+ assert.equal((await complete()).reason,'dispatched');
+ await complete.replyReady();await f.core.completed('alice',m);await complete();
+ assert.equal(attempts.length,2);assert.equal(attempts[1].kind,'translation');
+});
+test('translation failure leaves the already delivered reply intact without duplicate arrival fallback',async t=>{
+ const attempts=[];const f=fixture(t,{send:async(_sub,payload)=>{attempts.push(JSON.parse(payload));if(JSON.parse(payload).kind==='translation')throw Error('translation offline');}}),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'translation-failed',translationEnabled:true,translationPending:true};
+ await f.core.completed('alice',m);
+ const complete=f.core.prepareTranslation('alice',m);
+ assert.equal((await complete()).reason,'delivery_failed');
+ await complete.replyReady();await complete.replyReady();await complete();
+ assert.equal(attempts.length,2);assert.equal(attempts[0].kind,undefined);
+});
+test('visibility at each completion controls only that notification',async t=>{
+ const f=fixture(t),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'visibility-independent',translationEnabled:true,translationPending:true};
+ await f.core.completed('alice',m);assert.equal(f.sent.length,1);
+ const complete=f.core.prepareTranslation('alice',m);
+ f.core.updateState('alice',{...m,ts:m.ts+1,visible:true});
+ assert.equal((await complete()).reason,'foreground');assert.equal(f.sent.length,1);
+});
+test('retired translation fallback cannot emit a reply before the original server response',async t=>{
+ const f=fixture(t),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'fallback-before-reply',translationEnabled:true,translationPending:true};
+ const complete=f.core.prepareTranslation('alice',m);
+ await complete.replyReady();assert.equal(f.sent.length,0);
+ await f.core.completed('alice',m);assert.equal(f.sent.length,1);
+});
+
+test('a slow reply push does not delay translation notice dispatch',async t=>{
+ let finishReply;const attempts=[];
+ const f=fixture(t,{send:async(_sub,payload)=>{const p=JSON.parse(payload);attempts.push(p);if(!p.kind)await new Promise(resolve=>{finishReply=resolve;});}}),device=f.pair();
+ const m={...f.marker(device.id),type:'normal',generationId:'slow-reply',translationEnabled:true,translationPending:true};
+ const reply=f.core.completed('alice',m);
+ try {
+  const complete=f.core.prepareTranslation('alice',m);
+  assert.equal((await complete()).reason,'dispatched');
+  assert.equal(attempts.length,2);assert.equal(attempts[1].kind,'translation');
+ } finally {finishReply();await reply;}
 });
