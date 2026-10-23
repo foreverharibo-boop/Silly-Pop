@@ -209,3 +209,26 @@ test('cancelled review scopes disable late sends and never post completion recei
     assert.equal(late.enabled,false);assert.equal(late.reviewPending,false);
     await b.windowEvent('focus');assert.equal(b.calls.filter(x=>String(x.input).endsWith('/review-completed')).length,0);
 });
+
+test('background visibility still reaches the server when keepalive is rejected', async () => {
+    for (const event of ['visibilitychange', 'pagehide', 'freeze']) {
+        const b = await browser({ rejectKeepalive: true });
+        b.calls.length = 0;
+        if (event === 'visibilitychange') {
+            b.visibility('hidden');
+            await b.domEvent(event);
+        } else if (event === 'pagehide') await b.windowEvent(event);
+        else await b.domEvent(event);
+        const states = b.calls.filter(c => String(c.input).endsWith('/state'));
+        assert.equal(states.length, 2, `${event}: retry once without keepalive`);
+        assert.equal(states[0].init.keepalive, true);
+        assert.notEqual(states[1].init.keepalive, true);
+        assert.equal(states[1].init.body, states[0].init.body, 'preserve visibility, client and timestamp on retry');
+        assert.equal(JSON.parse(states[1].init.body).visible, false);
+    }
+});
+
+test('state rejection is visible instead of silently showing a healthy connection', async () => {
+    const b = await browser({ stateStatus: 503 });
+    assert.match(b.elements.get('[data-status]').textContent, /화면 상태.*503/);
+});

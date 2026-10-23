@@ -4,7 +4,7 @@ const path = require('node:path');
 const { randomBytes, createHash, ECDH } = require('node:crypto');
 const webpush = require('web-push');
 const { createReviewGate } = require('./review.cjs');
-const VERSION = '1.0.6';
+const VERSION = '1.0.7';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(24).toString('base64url');

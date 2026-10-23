@@ -1,5 +1,5 @@
-import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.6';
-import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.6';
+import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.7';
+import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.7';
 const API = '/api/plugins/silly-pop-ios';
 const PWA = 'https://foreverharibo-boop.github.io/Silly-Pop/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -45,7 +45,15 @@ function initialize() {
     function snapshot() { return { v: 1, clientId, deviceId: settings.deviceId, enabled: settings.enabled, backgroundOnly: settings.backgroundOnly, visible: foreground(), ts: timestamp() }; }
     function state() {
         if (!settings.deviceId) return;
-        void original(API + '/state', { method: 'POST', headers: headers(), body: JSON.stringify(snapshot()), keepalive: true }).catch(() => {});
+        // A rejected keepalive must not leave the server believing this tab is
+        // still visible. api retries once without keepalive using this same
+        // snapshot, so a delayed retry cannot supersede a newer visibility event.
+        const current = snapshot();
+        void api('/state', current, true).catch(error => {
+            if (current.ts === lastTs && current.deviceId === settings.deviceId) {
+                say(`화면 상태 전달 실패 · 알림이 누락될 수 있어요. ${error.message}`);
+            }
+        });
     }
     function diagnostic(label, entry) {
         if (!entry) return `${label}: 기록 없음`;
