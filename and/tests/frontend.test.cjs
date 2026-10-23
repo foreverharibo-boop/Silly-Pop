@@ -259,3 +259,7 @@ test('translation bridge is opt-in, independent of reply notices, and captures m
  assert.equal(bridge.captureTranslation('quiet'),null);assert.equal(bridge.captureTranslation('impersonate'),null);
  toggle.checked=false;toggle.change();assert.equal(bridge.captureTranslation('normal'),null);
 });
+
+test('root extension update route matches the installer extension',()=>{
+ for(const name of ['index.js','manifest.json'])assert.equal(fs.readFileSync(new URL('../../'+name,'file://'+__filename),'utf8'),fs.readFileSync(new URL('../extension/'+name,'file://'+__filename),'utf8'));
+});

@@ -1,5 +1,5 @@
-import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.5';
-import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.5';
+import { createMarkerFetch, createReplyBinding } from './marker.mjs?v=1.0.6';
+import { createReviewCoordinator, registerReviewProvider } from './review.mjs?v=1.0.6';
 const API = '/api/plugins/silly-pop-and';
 const PWA = 'https://silly-pop.pages.dev/';
 const ctx = () => globalThis.SillyTavern?.getContext?.();
@@ -7,7 +7,7 @@ const uuid = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b
 const KEY = 'silly-pop-and-browser-v1';
 function initialize() {
     if (document.getElementById('silly-pop-and')) return;
-    let settings = { enabled: false, backgroundOnly: true, deviceId: '' };
+    let settings = { translationEnabled: false, enabled: false, backgroundOnly: true, deviceId: '' };
     try { settings = { ...settings, ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { /* Defaults. */ }
     // Tabs share saved preferences, but must never overwrite each other's visibility.
     delete settings.clientId;
@@ -18,6 +18,8 @@ function initialize() {
     <p data-status role="status">연결 확인을 눌러 주세요.</p><p><small data-reply-status>실제 답장: 감지 기록 없음</small><br><small data-test-status>테스트 알림: 기록 없음</small><br><small data-state-status>화면 상태: 확인 전</small></p><div class="sp-actions"><button class="menu_button" data-check>연결 확인</button><a class="menu_button" href="${PWA}" target="_blank" rel="noopener noreferrer">안드로이드 알림 앱</a></div>
     <label>알림 받을 안드로이드 <select data-device><option value="">연결된 기기 없음</option></select></label>
     <label class="checkbox_label"><input type="checkbox" data-enabled><span>이 브라우저에서 보낸 답장 알림</span></label>
+    <label class="checkbox_label"><input type="checkbox" data-translation><span>서버 번역 완료 알림</span></label>
+    <small>릴레이에서 이 실리팝을 선택하고 베르바·긴르바 서버 번역을 켜면 사용합니다. 번역 작업이 접수되면 일반 답장 알림 대신 번역 완료 시 알립니다.</small>
     <label class="checkbox_label"><input type="checkbox" data-background><span>다른 화면을 볼 때만</span></label>
     <div class="sp-actions"><button class="menu_button" data-test>테스트 알림</button><button class="menu_button" data-remove>선택 기기 해제</button></div>
     <details><summary>안드로이드 처음 연결하기</summary><p>1. 연결 코드를 만든 뒤 안드로이드 알림 앱에 붙여 넣어 주세요. 코드는 10분 동안 유효해요.</p><button class="menu_button" data-start>연결 코드 만들기</button><textarea data-code readonly aria-label="안드로이드에 입력할 연결 코드"></textarea><button class="menu_button" data-copy>코드 복사</button>
@@ -43,7 +45,7 @@ function initialize() {
     const timestamp = () => lastTs = Math.max(Date.now(), lastTs + 1);
     let lifecycleHidden = false;
     function foreground() { return !lifecycleHidden && document.visibilityState === 'visible' && document.hasFocus?.() !== false; }
-    function snapshot() { return { v: 1, clientId, deviceId: settings.deviceId, enabled: settings.enabled, backgroundOnly: settings.backgroundOnly, visible: foreground(), ts: timestamp() }; }
+    function snapshot() { return { v: 1, clientId, deviceId: settings.deviceId, enabled: settings.enabled, translationEnabled: settings.translationEnabled, backgroundOnly: settings.backgroundOnly, visible: foreground(), ts: timestamp() }; }
     let lastStateRequest = 0;
     async function state(visible) {
         if (!settings.deviceId) return;
@@ -75,7 +77,7 @@ function initialize() {
         if (!result.devices.some(d => d.id === settings.deviceId)) { settings.deviceId = ''; settings.enabled = false; save(); }
         $('device').value = settings.deviceId;
         $('enabled').checked = settings.enabled;
-        $('background').checked = settings.backgroundOnly;
+        $('background').checked = settings.backgroundOnly; $('translation').checked = settings.translationEnabled;
         say(`안드로이드 서버 ${result.version} 연결됨 · ${result.devices.length}대 연결`);
         $('reply-status').textContent = diagnostic('실제 답장', result.lastReply);
         $('test-status').textContent = diagnostic('테스트 알림', result.lastTest);
@@ -89,7 +91,7 @@ function initialize() {
     action('test', async () => { await api('/test', { id: settings.deviceId }); await check(); say('테스트 알림을 Google 서버가 접수했어요. 기기의 팝업을 확인해 주세요.'); });
     action('remove', async () => { if (!settings.deviceId) return; if (!confirm('선택한 안드로이드의 알림 연결을 해제할까요?')) return; await api('/remove', { id: settings.deviceId }); settings.deviceId = ''; settings.enabled = false; save(); await check(); });
     $('device').addEventListener('change', () => { settings.deviceId = $('device').value; if (!settings.deviceId) settings.enabled = false; $('enabled').checked = settings.enabled; save(); state(); });
-    for (const [name, key] of [['enabled', 'enabled'], ['background', 'backgroundOnly']]) $(name).addEventListener('change', () => { settings[key] = $(name).checked; if (!settings.deviceId) { settings.enabled = false; $('enabled').checked = false; say('안드로이드를 먼저 연결해 주세요.'); } save(); state(); });
+    for (const [name, key] of [['enabled', 'enabled'], ['translation', 'translationEnabled'], ['background', 'backgroundOnly']]) $(name).addEventListener('change', () => { settings[key] = $(name).checked; if (!settings.deviceId) { settings.enabled = false; $('enabled').checked = false; say('안드로이드를 먼저 연결해 주세요.'); } save(); state(); });
     // Final request data identifies the generation even when nested quiet/dry
     // generations interrupt the generic lifecycle events. Never use a shared
     // one-shot "armed" flag to decide whether an outgoing reply is eligible.
@@ -105,6 +107,11 @@ function initialize() {
         const characterName = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
         return review.mark({ ...snapshot(), requestId: uuid(), characterName });
     }
+    globalThis[Symbol.for('silly-pop.and.notifications.v1')] = Object.freeze({ apiVersion:1,
+        captureTranslation(type='normal') {
+            if (!settings.translationEnabled || !settings.deviceId || !['normal','regenerate','swipe','continue'].includes(type)) return null;
+            return { ...snapshot(), type, generationId:uuid(), characterName:String(ctx()?.name2 || '').slice(0,80) };
+        } });
     const c = ctx(), events = c?.eventTypes || c?.event_types;
     function listen(name, handler, first = false) {
         if (!c?.eventSource || !events?.[name]) return;
@@ -136,7 +143,7 @@ function initialize() {
     document.addEventListener('resume', restored);
     globalThis.addEventListener('focus', restored);
     globalThis.addEventListener('blur', hidden);
-    $('enabled').checked = settings.enabled; $('background').checked = settings.backgroundOnly;
+    $('enabled').checked = settings.enabled; $('background').checked = settings.backgroundOnly; $('translation').checked = settings.translationEnabled;
     save(); void check().catch(e => say(e.message));
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true }); else initialize();
