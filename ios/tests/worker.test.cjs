@@ -26,6 +26,8 @@ test('worker displays APK character titles, fallback, and test notifications', a
         registration: { scope: 'https://example.test/', showNotification: async (...args) => shown.push(args) } };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../docs/sw.js'), 'utf8'), { self, URL });
     const cases = [
+        [{kind:'translation',characterName:'테스트'}, '테스트의 답장 번역이 완료됐어요'],
+        [{kind:'translation'}, '답장 번역이 완료됐어요'],
         [{ characterName: '김홍진' }, '김홍진의 답장이 도착했어요'],
         [{ characterName: ' \n ' }, '답장이 도착했어요'],
         [{ characterName: { value: 'wrong type' } }, '답장이 도착했어요'],

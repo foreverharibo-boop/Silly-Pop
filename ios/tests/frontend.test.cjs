@@ -37,7 +37,7 @@ async function browser(options = {}) {
     vm.runInNewContext(fs.readFileSync(require.resolve('../extension/index.js'), 'utf8').replace(/^import [^\r\n]*\r?\n/gm, ''), sandbox);
     // Allow the initial status fetch to finish before running a generation.
     await new Promise(resolve => setImmediate(resolve));
-    return { sandbox, context, calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
+    return { bridge:vm.runInNewContext("globalThis[Symbol.for('silly-pop.ios.notifications.v1')]",sandbox), sandbox, context, calls, wire, fetch: (...args) => sandbox.fetch(...args), elements,
         focus: value => { focused = value; },
         visibility: value => { sandbox.document.visibilityState = value; },
         windowEvent: async name => { windowHandlers.get(name)?.(); await new Promise(resolve => setImmediate(resolve)); },
@@ -231,4 +231,15 @@ test('background visibility still reaches the server when keepalive is rejected'
 test('state rejection is visible instead of silently showing a healthy connection', async () => {
     const b = await browser({ stateStatus: 503 });
     assert.match(b.elements.get('[data-status]').textContent, /화면 상태.*503/);
+});
+
+test('translation bridge is opt-in, independent of reply notices, and captures metadata only',async()=>{
+ const b=await browser();const bridge=b.bridge;
+ assert.equal(bridge.captureTranslation('normal'),null);
+ const toggle=b.elements.get('[data-translation]');toggle.checked=true;toggle.change();
+ const reply=b.elements.get('[data-enabled]');reply.checked=false;reply.change();
+ const marker=bridge.captureTranslation('normal');assert.equal(marker.translationEnabled,true);assert.equal(marker.enabled,false);
+ assert.equal(marker.deviceId,'d'.repeat(32));assert.equal(marker.characterName,'Speaker');assert.equal(marker.text,undefined);
+ assert.equal(bridge.captureTranslation('quiet'),null);assert.equal(bridge.captureTranslation('impersonate'),null);
+ toggle.checked=false;toggle.change();assert.equal(bridge.captureTranslation('normal'),null);
 });
